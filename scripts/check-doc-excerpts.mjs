@@ -2,9 +2,9 @@
 // Usage: node scripts/check-doc-excerpts.mjs [file.md | dir]...   (default: SPEC.md; a dir means its *.md)
 //
 // Rules for a block:
-// - First line `// <path>`: the file, relative to src/ (or prisma/schema.prisma). Its other lines must appear
+// - First line `// <path>`: the file, relative to src/ (or prisma/…, test/…). Its other lines must appear
 //   in that file, in order (whitespace-insensitive). Blank lines and lines containing `…` (elision) are skipped.
-// - First line `// not in the example code: <why>`: an alternative, not checked; listed in the report.
+// - First line `// not in the example code: <why>` or `// variant: <why>`: an alternative, not checked; listed in the report.
 // - Anything else fails.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import os from "node:os"
@@ -19,7 +19,8 @@ const docPaths = (args.length > 0 ? args : [path.join(root, "SPEC.md")]).flatMap
 
 const normalize = (line) => line.replace(/\s+/g, " ").trim()
 const blocks = docPaths.flatMap((docPath) => {
-  const doc = readFileSync(docPath, "utf8")
+  // Blanked, not removed, so line numbers stay right: code inside a ~~~ fence is an example of a doc, not of this code.
+  const doc = readFileSync(docPath, "utf8").replace(/^~~~[\s\S]*?^~~~/gm, (fence) => fence.replace(/[^\n]/g, " "))
   return [...doc.matchAll(/^```(ts|prisma)\n([\s\S]*?)^```/gm)].map((match) => ({
     language: match[1],
     lines: match[2].replace(/\n$/, "").split("\n"),
@@ -35,16 +36,16 @@ for (const block of blocks) {
   const [header, ...body] = block.lines
   const { where } = block
   const pathMatch = /^\/\/ ([\w./-]+\.(?:ts|prisma))$/.exec(header ?? "")
-  if (header?.startsWith("// not in the example code:")) {
+  if (header?.startsWith("// not in the example code:") || header?.startsWith("// variant:")) {
     unchecked.push(`${where}: ${header.slice(3)}`)
     continue
   }
   if (!pathMatch) {
-    failures.push(`${where}: first line must be "// <path>" or "// not in the example code: <why>", got: ${header}`)
+    failures.push(`${where}: first line must be "// <path>", "// not in the example code: <why>", or "// variant: <why>", got: ${header}`)
     continue
   }
   const relativePath = pathMatch[1]
-  const filePath = relativePath.startsWith("prisma/") ? path.join(root, relativePath) : path.join(root, "src", relativePath)
+  const filePath = /^(prisma|test)\//.test(relativePath) ? path.join(root, relativePath) : path.join(root, "src", relativePath)
   if (!existsSync(filePath)) {
     failures.push(`${where}: no such file ${relativePath}`)
     continue
