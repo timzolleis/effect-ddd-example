@@ -2,7 +2,7 @@
 
 Reference implementation of the [`effect-ddd` skill](https://github.com/timzolleis/.dotfiles/tree/main/agents/.agents/skills/effect-ddd): one module, `absence` (draft → active → archived), built with Effect 4 and Prisma 7. Every concept the skill names has its implementation here.
 
-Built by an agent following the skill, then reviewed against it. The two are kept in sync: the skill's code blocks are excerpts of this code, and `npm run check:skill` fails when they drift.
+Built with that skill.
 
 ```sh
 npm install
