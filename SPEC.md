@@ -107,7 +107,7 @@ src/
 ├─ lib/
 │  ├─ prefixed-id.ts                    prefixedId(prefix), createPrefixedId(prefix)
 │  ├─ with-optional-tag.ts              decode-only variant of a TaggedStruct whose input may omit _tag
-│  ├─ match-tag.ts                      matchTag, OfTag: tag dispatch whose result follows the tag
+│  ├─ match-tag.ts                      matchTag, MemberWithTag: tag dispatch whose result follows the tag
 │  ├─ date-time-utc-from-date.ts        Date → DateTime.Utc, null stays null
 │  ├─ auth-middleware.ts                stand-in for the host's auth: provides CurrentUser
 │  └─ organization-member-middleware.ts :organizationId → membership check → CurrentActor
@@ -542,8 +542,8 @@ The repository port belongs to the domain; ports owned by other modules sit in `
 export type FindAbsenceByIdInput = { readonly organizationId: OrganizationId; readonly absenceId: AbsenceId }
 
 // The constraint makes it exhaustive: a new event doesn't compile until it names its write error.
-type ByAbsenceEventTag<T extends Record<AbsenceEvent["_tag"], unknown>> = T
-export type AbsenceEventWriteErrors = ByAbsenceEventTag<{
+type OneEntryPerAbsenceEventTag<T extends Record<AbsenceEvent["_tag"], unknown>> = T
+export type AbsenceEventWriteErrors = OneEntryPerAbsenceEventTag<{
   AbsenceDraftedEvent: AbsenceAlreadyExistsError
   AbsenceRescheduledEvent: AbsenceChangedConcurrentlyError
   AbsenceReassignedEvent: AbsenceChangedConcurrentlyError
@@ -559,11 +559,11 @@ export class AbsenceRepository extends Context.Service<AbsenceRepository, {
     Effect.Effect<ActiveAbsence, AbsenceNotFoundError | AbsenceStillDraftError | AbsenceAlreadyArchivedError>
   findEditableAbsenceById(input: FindAbsenceByIdInput):
     Effect.Effect<EditableAbsence, AbsenceNotFoundError | AbsenceAlreadyArchivedError>
-  publishAbsenceEvent<Tag extends AbsenceEvent["_tag"]>(event: OfTag<AbsenceEvent, Tag>): Effect.Effect<void, AbsenceEventWriteErrors[Tag]>
+  publishAbsenceEvent<Tag extends AbsenceEvent["_tag"]>(event: MemberWithTag<AbsenceEvent, Tag>): Effect.Effect<void, AbsenceEventWriteErrors[Tag]>
 }>()("AbsenceRepository") {}
 ```
 
-`publishAbsenceEvent(archivedEvent)` fails only with `AbsenceChangedConcurrentlyError`: TypeScript infers `Tag` from the event, and the tag picks its write error, so each use case's signature stays exact. `OfTag<AbsenceEvent, Tag>` is the event with that tag (`lib/match-tag.ts`, §10).
+`publishAbsenceEvent(archivedEvent)` fails only with `AbsenceChangedConcurrentlyError`: TypeScript infers `Tag` from the event, and the tag picks its write error, so each use case's signature stays exact. `MemberWithTag<AbsenceEvent, Tag>` is the event with that tag (`lib/match-tag.ts`, §10).
 
 ```ts
 // shared/domain-events.ts
@@ -1000,7 +1000,7 @@ Prisma errors: the port declares no infrastructure errors, so every Prisma error
   })
 
   const publishAbsenceEvent = Effect.fn("PrismaAbsenceRepository.publishAbsenceEvent")(
-    function* <Tag extends AbsenceEvent["_tag"]>(event: OfTag<AbsenceEvent, Tag>) {
+    function* <Tag extends AbsenceEvent["_tag"]>(event: MemberWithTag<AbsenceEvent, Tag>) {
       yield* writeAbsenceEvent(event)
       yield* domainEvents.publishDomainEvent(event)   // not atomic with the write
     },
@@ -1020,9 +1020,9 @@ The dispatch is `matchTag`, the one helper for tag dispatch whose result type fo
 // lib/match-tag.ts
 type Tagged = { readonly _tag: string }
 
-export type OfTag<U extends Tagged, Tag extends U["_tag"]> = Extract<U, { readonly _tag: Tag }>
+export type MemberWithTag<U extends Tagged, Tag extends U["_tag"]> = Extract<U, { readonly _tag: Tag }>
 
-type HandlersByTag<U extends Tagged, Out> = { readonly [Tag in keyof Out]: (value: OfTag<U, Tag & U["_tag"]>) => Out[Tag] }
+type HandlersByTag<U extends Tagged, Out> = { readonly [Tag in keyof Out]: (value: MemberWithTag<U, Tag & U["_tag"]>) => Out[Tag] }
 
 export const matchTag = <U extends Tagged>() =>
   <Out extends { readonly [Tag in U["_tag"]]: unknown }>(
@@ -1030,11 +1030,11 @@ export const matchTag = <U extends Tagged>() =>
   ) => {
     // Indexing the mapped type with a generic Tag keeps value and result correlated (TypeScript #47109).
     const handlerByTag: HandlersByTag<U, Out> = handlers
-    return <Tag extends U["_tag"]>(value: OfTag<U, Tag>): Out[Tag] => handlerByTag[value._tag](value)
+    return <Tag extends U["_tag"]>(value: MemberWithTag<U, Tag>): Out[Tag] => handlerByTag[value._tag](value)
   }
 ```
 
-- `matchTag<U>()(handlers)`: one handler per tag of `U`. The result is `<Tag>(value: OfTag<U, Tag>) => Out[Tag]`. `Out` is inferred from the handlers unless given.
+- `matchTag<U>()(handlers)`: one handler per tag of `U`. The result is `<Tag>(value: MemberWithTag<U, Tag>) => Out[Tag]`. `Out` is inferred from the handlers unless given.
 - Give `Out` when a declared type already fixes the result, as the port does here. Otherwise infer it (§11).
 - `Out extends` rejects a missing tag; the `never` part rejects an unknown one.
 - Curried, because TypeScript can't take `U` explicitly and infer `Out` in the same call.

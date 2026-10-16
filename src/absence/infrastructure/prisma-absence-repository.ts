@@ -2,7 +2,7 @@ import { DateTime, Effect, Layer, Match, Predicate, Schema } from "effect"
 import type { Prisma } from "~prisma/client"
 import { PrismaService } from "~prisma/effect"
 import { dateTimeUtcFromDate } from "../../lib/date-time-utc-from-date.ts"
-import { matchTag, type OfTag } from "../../lib/match-tag.ts"
+import { matchTag, type MemberWithTag } from "../../lib/match-tag.ts"
 import { withOptionalTag } from "../../lib/with-optional-tag.ts"
 import { DomainEvents } from "../../shared/domain-events.ts"
 import { ActiveAbsence, DraftAbsence } from "../domain/absence.ts"
@@ -201,7 +201,7 @@ export const PrismaAbsenceRepository = Layer.effect(AbsenceRepository, Effect.ge
   })
 
   const publishAbsenceEvent = Effect.fn("PrismaAbsenceRepository.publishAbsenceEvent")(
-    function* <Tag extends AbsenceEvent["_tag"]>(event: OfTag<AbsenceEvent, Tag>) {
+    function* <Tag extends AbsenceEvent["_tag"]>(event: MemberWithTag<AbsenceEvent, Tag>) {
       yield* writeAbsenceEvent(event)
       yield* domainEvents.publishDomainEvent(event)   // not atomic with the write
     },
