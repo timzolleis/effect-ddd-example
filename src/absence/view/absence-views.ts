@@ -18,14 +18,16 @@ export const AbsenceView = Schema.Struct({
 })
 export type AbsenceView = typeof AbsenceView.Type
 
+// Absent filter = no condition. Named for the reader, not for a column: the adapter maps each one.
+export type AbsenceListFilters = { readonly assigneeId?: UserId; readonly creatorId?: UserId }
+
 export class AbsenceViews extends Context.Service<AbsenceViews, {
   // not visible = not found
   getAbsenceById(input: {
     readonly organizationId: OrganizationId; readonly visibility: AbsenceVisibility; readonly absenceId: AbsenceId
   }): Effect.Effect<AbsenceView, AbsenceNotFoundError>
-  // filters combine with AND, then visibility; an absent filter is no condition
+  // filters combine with AND, then visibility
   listAbsences(input: {
-    readonly organizationId: OrganizationId; readonly visibility: AbsenceVisibility
-    readonly assigneeId?: UserId | undefined; readonly creatorId?: UserId | undefined
+    readonly organizationId: OrganizationId; readonly visibility: AbsenceVisibility; readonly filters: AbsenceListFilters
   }): Effect.Effect<ReadonlyArray<AbsenceView>>
 }>()("AbsenceViews") {}

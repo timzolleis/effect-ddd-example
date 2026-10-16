@@ -14,13 +14,13 @@ export const absenceActorFromPermissions = ({ userId, organizationId, permission
   readonly permissions: Permissions
   readonly relatedUserIds: ReadonlySet<UserId>
 }): AbsenceActor => {
-  const has = (permission: AbsencePermission) => permissions.hasPermission(permission, organizationId)
+  const hasAbsencePermission = (permission: AbsencePermission) => permissions.hasPermission(permission, organizationId)
   return {
     userId,
     relatedUserIds,
-    mayEditOthersAbsences: has("absences:update"),
-    mayDeleteOthersAbsences: has("absences:delete"),
-    mayAssignAnyone: has("absences:update"),
-    mayReadOthersAbsences: has("absences:read") || has("absences:update"),   // edit implies read
+    mayEditOthersAbsences: hasAbsencePermission("absences:update"),
+    mayDeleteOthersAbsences: hasAbsencePermission("absences:delete"),
+    mayAssignAnyone: hasAbsencePermission("absences:update"),
+    mayReadOthersAbsences: hasAbsencePermission("absences:read") || hasAbsencePermission("absences:update"),   // edit implies read
   }
 }

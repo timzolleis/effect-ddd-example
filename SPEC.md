@@ -17,6 +17,7 @@ Conventions:
 - Errors are written out in every signature, never hidden behind a union alias.
 - Time is `DateTime.Utc` (`Schema.DateTimeUtc`) in the model, events, errors, views, and HTTP. `Date` exists only at Prisma. Compare with `DateTime.isLessThan` etc., never `<` or `===`.
 - The domain returns `Result`; a use case lifts it with `Effect.fromResult`. A `Result` can't be yielded inside `Effect.gen`.
+- An error is an `Effect`: return or `yield*` `new X(…)`, never `Effect.fail(new X(…))`. The domain returns `Result`, so it uses `Result.fail(new X(…))`.
 - Comments say why, never what the line already says.
 
 ---
@@ -365,8 +366,8 @@ export const checkPolicies = <Input, E>(
   input: Input,
 ): Result.Result<void, E> => {
   for (const policy of policies) {
-    const result = policy(input)
-    if (Result.isFailure(result)) return result
+    const policyResult = policy(input)
+    if (Result.isFailure(policyResult)) return policyResult
   }
   return Result.succeed(undefined)
 }
@@ -376,12 +377,12 @@ const isAbsenceCreator = (input: { readonly absence: Absence; readonly actor: Ab
   isActingUser({ actor: input.actor, userId: input.absence.creatorId })
 …
 export const onlyCreatorOrPermittedCanEditPolicy = (input: { readonly absence: EditableAbsence; readonly actor: AbsenceActor }) => {
-  const notAllowed = () => Result.fail(new NotAllowedToEditAbsenceError({
+  const notAllowedToEditAbsence = () => Result.fail(new NotAllowedToEditAbsenceError({
     absenceId: input.absence.absenceId, actorId: input.actor.userId, absenceState: input.absence._tag,
   }))
   return Match.valueTags(input.absence, {
-    DraftAbsence: () => isAbsenceCreator(input) ? Result.succeed(undefined) : notAllowed(),
-    ActiveAbsence: () => isAbsenceCreator(input) || input.actor.mayEditOthersAbsences ? Result.succeed(undefined) : notAllowed(),
+    DraftAbsence: () => isAbsenceCreator(input) ? Result.succeed(undefined) : notAllowedToEditAbsence(),
+    ActiveAbsence: () => isAbsenceCreator(input) || input.actor.mayEditOthersAbsences ? Result.succeed(undefined) : notAllowedToEditAbsence(),
   })
 }
 …
@@ -611,15 +612,17 @@ export const AbsenceView = Schema.Struct({
 })
 export type AbsenceView = typeof AbsenceView.Type
 
+// Absent filter = no condition. Named for the reader, not for a column: the adapter maps each one.
+export type AbsenceListFilters = { readonly assigneeId?: UserId; readonly creatorId?: UserId }
+
 export class AbsenceViews extends Context.Service<AbsenceViews, {
   // not visible = not found
   getAbsenceById(input: {
     readonly organizationId: OrganizationId; readonly visibility: AbsenceVisibility; readonly absenceId: AbsenceId
   }): Effect.Effect<AbsenceView, AbsenceNotFoundError>
-  // filters combine with AND, then visibility; an absent filter is no condition
+  // filters combine with AND, then visibility
   listAbsences(input: {
-    readonly organizationId: OrganizationId; readonly visibility: AbsenceVisibility
-    readonly assigneeId?: UserId | undefined; readonly creatorId?: UserId | undefined
+    readonly organizationId: OrganizationId; readonly visibility: AbsenceVisibility; readonly filters: AbsenceListFilters
   }): Effect.Effect<ReadonlyArray<AbsenceView>>
 }>()("AbsenceViews") {}
 ```
@@ -632,34 +635,46 @@ The adapter translates the visibility into a Prisma `where`, used by every query
 ```ts
 // absence/infrastructure/prisma-absence-views.ts
 // Only translates the visibility; absenceVisibilityFromReader and system callers choose it.
-const hideOthersDraftsWhere = (userId: UserId): Prisma.AbsenceWhereInput =>
+const nonDraftOrCreatedByWhere = (userId: UserId): Prisma.AbsenceWhereInput =>
   ({ OR: [{ status: { not: "draft" } }, { creatorId: userId }] })
+
+const absenceWhereFromFilters = ({ assigneeId, creatorId }: AbsenceListFilters): Prisma.AbsenceWhereInput => ({
+  AND: [
+    assigneeId === undefined ? {} : { assigneeId },
+    creatorId === undefined ? {} : { creatorId },
+  ],
+})
 
 const absenceWhereFromVisibility = (visibility: AbsenceVisibility): Prisma.AbsenceWhereInput =>
   AbsenceVisibility.$match(visibility, {
     AllAbsences: () => ({}),
-    OrganizationAbsences: ({ userId }) => hideOthersDraftsWhere(userId),
+    OrganizationAbsences: ({ userId }) => nonDraftOrCreatedByWhere(userId),
     InvolvedAbsences: ({ userId, relatedUserIds }) => ({
       AND: [
-        hideOthersDraftsWhere(userId),
+        nonDraftOrCreatedByWhere(userId),
         { OR: [{ creatorId: userId }, { assigneeId: userId }, { assigneeId: { in: [...relatedUserIds] } }] },
       ],
     }),
   })
 …
     getAbsenceById: Effect.fn("PrismaAbsenceViews.getAbsenceById")(function* ({ organizationId, visibility, absenceId }) {
-      const row = yield* prisma.absence.findFirst({
-        where: { AND: [{ id: absenceId, organizationId }, absenceWhereFromVisibility(visibility)] },
+      // Not visible = no row = AbsenceNotFoundError; any other Prisma error dies.
+      const row = yield* prisma.absence.findUniqueOrThrow({
+        where: { id: absenceId, organizationId, AND: [absenceWhereFromVisibility(visibility)] },
         select: absenceViewSelect,
-      }).pipe(Effect.orDie)
-      if (row === null) return yield* new AbsenceNotFoundError({ absenceId })
+      }).pipe(
+        Effect.catchTag(
+          "PrismaRecordNotFoundError",
+          () => new AbsenceNotFoundError({ absenceId }),
+          (error) => Effect.die(error),
+        ),
+      )
       return yield* decodeAbsenceView(row)
     }),
 ```
 
-- `findFirst`, not `findUnique`: the visibility adds non-unique conditions under `AND`.
 - Rows are reshaped (`id → absenceId`, `Date → dateTimeUtcFromDate`) and decoded with `Schema.decodeEffect(AbsenceView)`; a row that doesn't decode dies.
-- With `exactOptionalPropertyTypes`, Prisma rejects `{ assigneeId: undefined }`: an absent filter becomes `{}` in the `AND` list.
+- Filters are `Schema.optionalKey` from the query to the port: an absent filter is a missing key. The adapter maps each filter to its condition in `absenceWhereFromFilters`, like the visibility: port names never reach Prisma unmapped.
 
 ---
 
@@ -722,9 +737,9 @@ export type CreateAbsenceCommand = {
   readonly to: DateTime.Utc
 }
 …
-      createAbsence: Effect.fn("CreateAbsenceService.createAbsence")(function* ({ organizationId, actor, assigneeId, from, to, ...command }) {
+      createAbsence: Effect.fn("CreateAbsenceService.createAbsence")(function* ({ organizationId, actor, absenceId: requestedAbsenceId, assigneeId, from, to }) {
         const now = yield* DateTime.now
-        const absenceId = command.absenceId ?? generateAbsenceId()
+        const absenceId = requestedAbsenceId ?? generateAbsenceId()
         // loaded every time, even when the actor may assign anyone: skipping it would move the rule here
         const assigneeIsOrganizationMember = yield* organizationMembers.isOrganizationMember({ organizationId, userId: assigneeId })
         const event = yield* Effect.fromResult(createAbsence({ absenceId, organizationId, actor, assigneeId, assigneeIsOrganizationMember, from, to, now }))
@@ -903,23 +918,26 @@ const decodeActiveAbsence = (row: AbsenceRow) =>
 
 ```ts
 // absence/infrastructure/prisma-absence-repository.ts
-  const findAbsenceRow = ({ organizationId, absenceId }: FindAbsenceByIdInput) =>
-    prisma.absence.findUnique({ where: { id: absenceId, organizationId }, select: absenceSelect }).pipe(
-      Effect.orDie,
-      Effect.flatMap((row) => row === null ? Effect.fail(new AbsenceNotFoundError({ absenceId })) : Effect.succeed(row)),
-    )
+  // No row in the organization is the expected failure; any other Prisma error dies. An unknown status makes Match.exhaustive throw: a defect.
 …
   const findActiveAbsenceById = Effect.fn("PrismaAbsenceRepository.findActiveAbsenceById")(
     function* ({ organizationId, absenceId }: FindAbsenceByIdInput) {
-      const row = yield* findAbsenceRow({ organizationId, absenceId })
+      const row = yield* prisma.absence.findUniqueOrThrow({ where: { id: absenceId, organizationId }, select: absenceSelect }).pipe(
+        Effect.catchTag(
+          "PrismaRecordNotFoundError",
+          () => new AbsenceNotFoundError({ absenceId }),
+          (error) => Effect.die(error),
+        ),
+      )
       return yield* Match.value(row.status).pipe(
-        Match.when("draft", () => Effect.fail(new AbsenceStillDraftError({ absenceId }))),
+        Match.when("draft", () => new AbsenceStillDraftError({ absenceId })),
         Match.when("active", () => decodeActiveAbsence(row)),
-        Match.when("archived", () => Effect.fail(new AbsenceAlreadyArchivedError({ absenceId }))),
+        Match.when("archived", () => new AbsenceAlreadyArchivedError({ absenceId })),
         Match.exhaustive,
       )
     },
   )
+  // …one per find, as in the table
 ```
 
 | Find | `"draft"` | `"active"` | `"archived"` |
@@ -928,7 +946,7 @@ const decodeActiveAbsence = (row: AbsenceRow) =>
 | `findActiveAbsenceById` | `AbsenceStillDraftError` | `decodeActiveAbsence` | `AbsenceAlreadyArchivedError` |
 | `findEditableAbsenceById` | `decodeDraftAbsence` | `decodeActiveAbsence` | `AbsenceAlreadyArchivedError` |
 
-`findUnique` takes `organizationId` next to the unique `id` (Prisma allows extra filters in a unique `where`), so another organization's absence is `AbsenceNotFoundError`. No `decodeArchivedAbsence`: no find returns an archived absence.
+`findUniqueOrThrow` takes `organizationId` next to the unique `id` (Prisma allows extra filters in a unique `where`), so another organization's absence is `AbsenceNotFoundError`. No `decodeArchivedAbsence`: no find returns an archived absence.
 
 ### Writes
 
@@ -953,39 +971,32 @@ Prisma errors: the port declares no infrastructure errors, so every Prisma error
 
 | Operation | Expected Prisma error | Becomes |
 |---|---|---|
-| `findUnique` | none (`null`) | `AbsenceNotFoundError` |
+| `findUniqueOrThrow` | `PrismaRecordNotFoundError` (P2025) | `AbsenceNotFoundError` |
 | `create` | `PrismaUniqueConstraintError` (P2002) | `AbsenceAlreadyExistsError`: `id` is the only unique constraint |
 | guarded `update` / `delete` | `PrismaRecordNotFoundError` (P2025) | `AbsenceChangedConcurrentlyError` |
 | any | anything else (connection, validation, …) | die |
 
 ```ts
 // absence/infrastructure/prisma-absence-repository.ts
-  // The guard matched no row: the absence changed or vanished since the find. Any other Prisma error dies.
-  const failOnNoMatchingRow = (absenceId: AbsenceId) =>
-    <A>(write: Effect.Effect<A, PrismaUpdateError | PrismaDeleteError>) =>
-      write.pipe(Effect.catchTag(
-        "PrismaRecordNotFoundError",
-        () => Effect.fail(new AbsenceChangedConcurrentlyError({ absenceId })),
-        (error) => Effect.die(error),
-      ))
-…
-  const writeAbsenceArchivedEvent = (event: AbsenceArchivedEvent) =>
-    prisma.absence.update({
-      where: { id: event.absenceId, organizationId: event.organizationId, status: "active" },
-      data: { status: "archived", archivedAt: DateTime.toDateUtc(event.occurredOn) },
-      select: { id: true },
-    }).pipe(failOnNoMatchingRow(event.absenceId), Effect.asVoid)
-…
   // Out is the port's error map, given explicitly: inferred from the writes, it wouldn't match AbsenceEventWriteErrors[Tag] for a generic Tag.
+  // A guarded write that matches no row means the absence changed or vanished since the find. Any other Prisma error dies.
   const writeAbsenceEvent = matchTag<AbsenceEvent>()<{
     readonly [Tag in AbsenceEvent["_tag"]]: Effect.Effect<void, AbsenceEventWriteErrors[Tag]>
   }>({
-    AbsenceDraftedEvent: writeAbsenceDraftedEvent,
-    AbsenceRescheduledEvent: writeAbsenceRescheduledEvent,
-    AbsenceReassignedEvent: writeAbsenceReassignedEvent,
-    AbsenceActivatedEvent: writeAbsenceActivatedEvent,
-    AbsenceArchivedEvent: writeAbsenceArchivedEvent,
-    AbsenceDeletedEvent: writeAbsenceDeletedEvent,
+    AbsenceArchivedEvent: (event) =>
+      prisma.absence.update({
+        where: { id: event.absenceId, organizationId: event.organizationId, status: "active" },
+        data: { status: "archived", archivedAt: DateTime.toDateUtc(event.occurredOn) },
+        select: { id: true },
+      }).pipe(
+        Effect.catchTag(
+          "PrismaRecordNotFoundError",
+          () => new AbsenceChangedConcurrentlyError({ absenceId: event.absenceId }),
+          (error) => Effect.die(error),
+        ),
+        Effect.asVoid,
+      ),
+    // …one per event, as in the table
   })
 
   const publishAbsenceEvent = Effect.fn("PrismaAbsenceRepository.publishAbsenceEvent")(
@@ -996,9 +1007,10 @@ Prisma errors: the port declares no infrastructure errors, so every Prisma error
   )
 ```
 
-- `Effect.catchTag(tag, f, orElse)`: the third argument handles every other error. Pass `(error) => Effect.die(error)`, not `Effect.die`: its `unknown` parameter makes TypeScript infer the error type as `unknown`, and the tag no longer type-checks. `failOnNoMatchingRow` takes the write as its argument for the same reason.
+- `Effect.catchTag(tag, f, orElse)`: the third argument handles every other error. Pass `(error) => Effect.die(error)`, not `Effect.die`: its `unknown` parameter makes TypeScript infer the error type as `unknown`, and the tag no longer type-checks.
 - `update` / `delete` with the guard in `where` throw P2025 when nothing matches. Not `updateMany` + `count === 0`.
 - Writes `select: { id: true }`: nothing is read back; the controller reads the view.
+- Each write is inline in `matchTag`'s handlers: `event` is typed per handler, and a write that fails with a different error than `AbsenceEventWriteErrors` names doesn't compile at that handler.
 - Every `DateTime.Utc` is converted with `DateTime.toDateUtc`.
 - No cast. A missing write, an unknown tag, or a write that fails with a different error than `AbsenceEventWriteErrors` names doesn't compile.
 
@@ -1061,7 +1073,7 @@ export class OrganizationMemberMiddleware extends HttpApiMiddleware.Service<Orga
       if (!(yield* organizationMembers.isOrganizationMember({ organizationId, userId: currentUser.userId }))) {
         return yield* new NotOrganizationMemberHttpError()
       }
-      return yield* handler.pipe(Effect.provideService(CurrentActor, { ...currentUser, organizationId }))
+      return yield* handler.pipe(Effect.provideService(CurrentActor, { userId: currentUser.userId, permissions: currentUser.permissions, organizationId }))
     }))
   }))
 }
@@ -1086,14 +1098,14 @@ export const absenceActorFromPermissions = ({ userId, organizationId, permission
   readonly permissions: Permissions
   readonly relatedUserIds: ReadonlySet<UserId>
 }): AbsenceActor => {
-  const has = (permission: AbsencePermission) => permissions.hasPermission(permission, organizationId)
+  const hasAbsencePermission = (permission: AbsencePermission) => permissions.hasPermission(permission, organizationId)
   return {
     userId,
     relatedUserIds,
-    mayEditOthersAbsences: has("absences:update"),
-    mayDeleteOthersAbsences: has("absences:delete"),
-    mayAssignAnyone: has("absences:update"),
-    mayReadOthersAbsences: has("absences:read") || has("absences:update"),   // edit implies read
+    mayEditOthersAbsences: hasAbsencePermission("absences:update"),
+    mayDeleteOthersAbsences: hasAbsencePermission("absences:delete"),
+    mayAssignAnyone: hasAbsencePermission("absences:update"),
+    mayReadOthersAbsences: hasAbsencePermission("absences:read") || hasAbsencePermission("absences:update"),   // edit implies read
   }
 }
 ```
@@ -1192,7 +1204,7 @@ export class AbsenceApiGroup extends HttpApiGroup.make("absences")
 …
     HttpApiEndpoint.get("listAbsences", "/absences", {
       params: OrganizationPathParams,
-      query: { assigneeId: Schema.optional(UserId), creatorId: Schema.optional(UserId) },
+      query: { assigneeId: Schema.optionalKey(UserId), creatorId: Schema.optionalKey(UserId) },
       success: Schema.Array(AbsenceView),
     }),
   )
@@ -1216,7 +1228,7 @@ AbsenceController.archiveAbsence({ params })
 ├─ CurrentActor                                         (from OrganizationMemberMiddleware)
 ├─ UserRelationships.listRelatedUserIds({ organizationId, userId })
 │    : Effect<ReadonlySet<UserId>>   → relatedUserIds, once per request
-├─ absenceActorFromPermissions({ ...currentActor, relatedUserIds }): AbsenceActor
+├─ absenceActorFromPermissions({ userId, organizationId, permissions, relatedUserIds }): AbsenceActor
 ├─ absenceVisibilityFromReader(actor): AbsenceVisibility
 ├─ ArchiveAbsenceService.archiveAbsence({ organizationId, actor, absenceId })
 │    : Effect<void, AbsenceNotFoundError | AbsenceStillDraftError | AbsenceAlreadyArchivedError
@@ -1235,31 +1247,35 @@ export const AbsenceController = HttpApiBuilder.group(Api, "absences", Effect.fn
   const userRelationships = yield* UserRelationships
 
   // Once per request: the actor for commands, and the visibility for reads.
-  const loadAbsenceActor = Effect.gen(function* () {
+  const loadAbsenceActorAndVisibility = Effect.gen(function* () {
     const currentActor = yield* CurrentActor
     const relatedUserIds = yield* userRelationships.listRelatedUserIds({
       organizationId: currentActor.organizationId, userId: currentActor.userId,
     })
-    const actor = absenceActorFromPermissions({ ...currentActor, relatedUserIds })
+    const actor = absenceActorFromPermissions({
+      userId: currentActor.userId, organizationId: currentActor.organizationId, permissions: currentActor.permissions, relatedUserIds,
+    })
     return { organizationId: currentActor.organizationId, actor, visibility: absenceVisibilityFromReader(actor) }
   })
 
   return handlers.handleAll({
     createAbsence: ({ payload }) => Effect.gen(function* () {
-      const { organizationId, actor, visibility } = yield* loadAbsenceActor
-      const absenceId = yield* createAbsenceService.createAbsence({ organizationId, actor, ...payload })
+      const { organizationId, actor, visibility } = yield* loadAbsenceActorAndVisibility
+      const absenceId = yield* createAbsenceService.createAbsence({
+        organizationId, actor, absenceId: payload.absenceId, assigneeId: payload.assigneeId, from: payload.from, to: payload.to,
+      })
       return yield* absenceViews.getAbsenceById({ organizationId, visibility, absenceId })
     }).pipe(Effect.mapError(absenceHttpErrorFromAbsenceError)),
 …
     archiveAbsence: ({ params }) => Effect.gen(function* () {
-      const { organizationId, actor, visibility } = yield* loadAbsenceActor
+      const { organizationId, actor, visibility } = yield* loadAbsenceActorAndVisibility
       yield* archiveAbsenceService.archiveAbsence({ organizationId, actor, absenceId: params.absenceId })
       return yield* absenceViews.getAbsenceById({ organizationId, visibility, absenceId: params.absenceId })
     }).pipe(Effect.mapError(absenceHttpErrorFromAbsenceError)),
 …
     listAbsences: ({ query }) => Effect.gen(function* () {
-      const { organizationId, visibility } = yield* loadAbsenceActor
-      return yield* absenceViews.listAbsences({ organizationId, visibility, ...query })
+      const { organizationId, visibility } = yield* loadAbsenceActorAndVisibility
+      return yield* absenceViews.listAbsences({ organizationId, visibility, filters: query })
     }),
   })
 }))
@@ -1272,7 +1288,7 @@ Retries and idempotency are decided here, per endpoint; the domain stays truthfu
 ```ts
 // not in the example code: an opt-in, retry-safe archive handler
 archiveAbsence: ({ params }) => Effect.gen(function* () {
-  const { organizationId, actor, visibility } = yield* loadAbsenceActor
+  const { organizationId, actor, visibility } = yield* loadAbsenceActorAndVisibility
   yield* archiveAbsenceService.archiveAbsence({ organizationId, actor, absenceId: params.absenceId }).pipe(
     Effect.catchTag("AbsenceAlreadyArchivedError", () => Effect.void),   // a retry of a finished archive: read back, 200
   )

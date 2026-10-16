@@ -81,7 +81,7 @@ export class AbsenceApiGroup extends HttpApiGroup.make("absences")
     }),
     HttpApiEndpoint.get("listAbsences", "/absences", {
       params: OrganizationPathParams,
-      query: { assigneeId: Schema.optional(UserId), creatorId: Schema.optional(UserId) },
+      query: { assigneeId: Schema.optionalKey(UserId), creatorId: Schema.optionalKey(UserId) },
       success: Schema.Array(AbsenceView),
     }),
   )

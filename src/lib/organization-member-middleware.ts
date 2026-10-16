@@ -25,7 +25,7 @@ export class OrganizationMemberMiddleware extends HttpApiMiddleware.Service<Orga
       if (!(yield* organizationMembers.isOrganizationMember({ organizationId, userId: currentUser.userId }))) {
         return yield* new NotOrganizationMemberHttpError()
       }
-      return yield* handler.pipe(Effect.provideService(CurrentActor, { ...currentUser, organizationId }))
+      return yield* handler.pipe(Effect.provideService(CurrentActor, { userId: currentUser.userId, permissions: currentUser.permissions, organizationId }))
     }))
   }))
 }

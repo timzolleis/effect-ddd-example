@@ -52,7 +52,7 @@ layer(TestLayer)("PrismaAbsenceViews", (it) => {
       it.effect(reader, () => Effect.gen(function* () {
         const nameById = yield* seed
         const absenceViews = yield* AbsenceViews
-        const absences = yield* absenceViews.listAbsences({ organizationId, visibility })
+        const absences = yield* absenceViews.listAbsences({ organizationId, visibility, filters: {} })
         expect(absences.map((absence) => nameById.get(absence.absenceId)).sort()).toEqual([...expected].sort())
       }))
     }
@@ -62,7 +62,7 @@ layer(TestLayer)("PrismaAbsenceViews", (it) => {
     yield* seed
     const absenceViews = yield* AbsenceViews
     const visibility = absenceVisibilityFromReader(makeActor({ userId: alice }))
-    expect(yield* absenceViews.listAbsences({ organizationId, visibility, assigneeId: bob })).toEqual([])
+    expect(yield* absenceViews.listAbsences({ organizationId, visibility, filters: { assigneeId: bob } })).toEqual([])
   }))
 
   it.effect("getAbsenceById of an invisible absence → AbsenceNotFoundError", () => Effect.gen(function* () {

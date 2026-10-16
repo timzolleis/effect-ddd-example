@@ -17,8 +17,8 @@ export const checkPolicies = <Input, E>(
   input: Input,
 ): Result.Result<void, E> => {
   for (const policy of policies) {
-    const result = policy(input)
-    if (Result.isFailure(result)) return result
+    const policyResult = policy(input)
+    if (Result.isFailure(policyResult)) return policyResult
   }
   return Result.succeed(undefined)
 }
@@ -35,22 +35,22 @@ export const onlyCreatorCanActivatePolicy = (input: { readonly absence: DraftAbs
     : Result.fail(new NotAbsenceCreatorError({ absenceId: input.absence.absenceId, actorId: input.actor.userId }))
 
 export const onlyCreatorOrPermittedCanEditPolicy = (input: { readonly absence: EditableAbsence; readonly actor: AbsenceActor }) => {
-  const notAllowed = () => Result.fail(new NotAllowedToEditAbsenceError({
+  const notAllowedToEditAbsence = () => Result.fail(new NotAllowedToEditAbsenceError({
     absenceId: input.absence.absenceId, actorId: input.actor.userId, absenceState: input.absence._tag,
   }))
   return Match.valueTags(input.absence, {
-    DraftAbsence: () => isAbsenceCreator(input) ? Result.succeed(undefined) : notAllowed(),
-    ActiveAbsence: () => isAbsenceCreator(input) || input.actor.mayEditOthersAbsences ? Result.succeed(undefined) : notAllowed(),
+    DraftAbsence: () => isAbsenceCreator(input) ? Result.succeed(undefined) : notAllowedToEditAbsence(),
+    ActiveAbsence: () => isAbsenceCreator(input) || input.actor.mayEditOthersAbsences ? Result.succeed(undefined) : notAllowedToEditAbsence(),
   })
 }
 
 export const onlyCreatorOrPermittedCanDeletePolicy = (input: { readonly absence: EditableAbsence; readonly actor: AbsenceActor }) => {
-  const notAllowed = () => Result.fail(new NotAllowedToDeleteAbsenceError({
+  const notAllowedToDeleteAbsence = () => Result.fail(new NotAllowedToDeleteAbsenceError({
     absenceId: input.absence.absenceId, actorId: input.actor.userId, absenceState: input.absence._tag,
   }))
   return Match.valueTags(input.absence, {
-    DraftAbsence: () => isAbsenceCreator(input) ? Result.succeed(undefined) : notAllowed(),
-    ActiveAbsence: () => isAbsenceCreator(input) || input.actor.mayDeleteOthersAbsences ? Result.succeed(undefined) : notAllowed(),
+    DraftAbsence: () => isAbsenceCreator(input) ? Result.succeed(undefined) : notAllowedToDeleteAbsence(),
+    ActiveAbsence: () => isAbsenceCreator(input) || input.actor.mayDeleteOthersAbsences ? Result.succeed(undefined) : notAllowedToDeleteAbsence(),
   })
 }
 

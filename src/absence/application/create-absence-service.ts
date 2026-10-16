@@ -27,9 +27,9 @@ export class CreateAbsenceService extends Context.Service<CreateAbsenceService, 
     const absenceRepository = yield* AbsenceRepository
     const organizationMembers = yield* OrganizationMembers
     return CreateAbsenceService.of({
-      createAbsence: Effect.fn("CreateAbsenceService.createAbsence")(function* ({ organizationId, actor, assigneeId, from, to, ...command }) {
+      createAbsence: Effect.fn("CreateAbsenceService.createAbsence")(function* ({ organizationId, actor, absenceId: requestedAbsenceId, assigneeId, from, to }) {
         const now = yield* DateTime.now
-        const absenceId = command.absenceId ?? generateAbsenceId()
+        const absenceId = requestedAbsenceId ?? generateAbsenceId()
         // loaded every time, even when the actor may assign anyone: skipping it would move the rule here
         const assigneeIsOrganizationMember = yield* organizationMembers.isOrganizationMember({ organizationId, userId: assigneeId })
         const event = yield* Effect.fromResult(createAbsence({ absenceId, organizationId, actor, assigneeId, assigneeIsOrganizationMember, from, to, now }))
