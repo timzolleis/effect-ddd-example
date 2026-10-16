@@ -1,0 +1,35 @@
+{
+  "name": "effect-ddd-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "prisma generate",
+    "typecheck": "tsc -p .",
+    "test": "vitest run",
+    "check:doc": "node scripts/check-doc-excerpts.mjs",
+    "check:skill": "node scripts/check-doc-excerpts.mjs ~/.agents/skills/effect-ddd",
+    "db:up": "docker compose up -d --wait",
+    "db:push": "prisma db push",
+    "verify": "npm run generate && npm run typecheck && npm run db:up && npm run db:push && npm test && npm run check:doc"
+  },
+  "dependencies": {
+    "@paralleldrive/cuid2": "^3.3.0",
+    "@prisma/adapter-pg": "^7.10.1",
+    "@prisma/client": "^7.10.1",
+    "effect": "^4.0.5",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@effect/vitest": "^4.0.5",
+    "@types/node": "^26.6.5",
+    "@types/pg": "^8.23.1",
+    "effect-prisma-generator": "^0.11.0",
+    "prisma": "^7.10.1",
+    "typescript": "5.9",
+    "vitest": "^5.0.5"
+  },
+  "allowScripts": {
+    "@prisma/engines@7.10.1": true,
+    "prisma@7.10.1": true
+  }
+}

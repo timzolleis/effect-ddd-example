@@ -1,0 +1,36 @@
+generator client {
+  provider = "prisma-client"
+  output   = "./generated"
+}
+
+generator effect {
+  provider         = "effect-prisma-generator"
+  output           = "./generated/effect.ts"
+  clientImportPath = "./client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AbsenceStatus {
+  draft
+  active
+  archived
+}
+
+model Absence {
+  id             String        @id // AbsenceId
+  organizationId String
+  creatorId      String
+  assigneeId     String
+  from           DateTime
+  to             DateTime
+  status         AbsenceStatus
+  createdAt      DateTime // AbsenceDraftedEvent.occurredOn; no @default
+  activatedAt    DateTime?
+  archivedAt     DateTime?
+
+  @@index([organizationId, assigneeId])
+  @@index([organizationId, creatorId])
+}
