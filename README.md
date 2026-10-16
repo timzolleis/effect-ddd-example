@@ -15,6 +15,5 @@ npm run check:skill  # every ts/prisma block in the skill is an excerpt of this 
 | `src/shared/`, `src/lib/auth-middleware.ts` | stand-ins for what a host already has (ids, auth, ports); faked in `test/support.ts` |
 | `test/` | one file per place that owns rules |
 | `SPEC.md` | archived design record; its code blocks are checked against `src/` |
-| `cold-read/` | the cold-read test for the skill: a fresh agent builds another module from the skill alone |
 
 `docker compose down` stops the database.
