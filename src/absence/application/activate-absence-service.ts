@@ -1,4 +1,5 @@
 import { Context, DateTime, Effect, Layer } from "effect"
+import { DomainEvents } from "../../shared/domain-events.ts"
 import type { OrganizationId } from "../../shared/ids.ts"
 import type { AbsenceActor } from "../domain/absence-actor.ts"
 import type {
@@ -7,7 +8,7 @@ import type {
 } from "../domain/absence-error.ts"
 import type { AbsenceId } from "../domain/absence-id.ts"
 import { AbsenceRepository } from "../domain/absence-repository.ts"
-import { activateAbsence } from "../domain/absence.ts"
+import { activateAbsence, evolveAbsence } from "../domain/absence.ts"
 
 export type ActivateAbsenceCommand = { readonly organizationId: OrganizationId; readonly actor: AbsenceActor; readonly absenceId: AbsenceId }
 
@@ -19,12 +20,14 @@ export class ActivateAbsenceService extends Context.Service<ActivateAbsenceServi
 }>()("ActivateAbsenceService") {
   static layer = Layer.effect(ActivateAbsenceService, Effect.gen(function* () {
     const absenceRepository = yield* AbsenceRepository
+    const domainEvents = yield* DomainEvents
     return ActivateAbsenceService.of({
       activateAbsence: Effect.fn("ActivateAbsenceService.activateAbsence")(function* ({ organizationId, actor, absenceId }) {
         const now = yield* DateTime.now
         const absence = yield* absenceRepository.findDraftAbsenceById({ organizationId, absenceId })
         const event = yield* Effect.fromResult(activateAbsence({ absence, actor, now }))
-        yield* absenceRepository.publishAbsenceEvent(event)
+        yield* absenceRepository.updateAbsence({ before: absence, after: evolveAbsence({ absence, event }) })
+        yield* domainEvents.publishDomainEvent(event)
       }),
     })
   }))

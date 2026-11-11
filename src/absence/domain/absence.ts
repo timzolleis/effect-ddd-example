@@ -1,4 +1,4 @@
-import { DateTime, Result, Schema } from "effect"
+import { DateTime, Match, Result, Schema } from "effect"
 import { OrganizationId, UserId } from "../../shared/ids.ts"
 import type { AbsenceActor } from "./absence-actor.ts"
 import type {
@@ -7,7 +7,7 @@ import type {
 } from "./absence-error.ts"
 import {
   AbsenceActivatedEvent, AbsenceArchivedEvent, AbsenceDeletedEvent, AbsenceDraftedEvent,
-  AbsenceReassignedEvent, AbsenceRescheduledEvent,
+  AbsenceReassignedEvent, AbsenceRescheduledEvent, type AbsenceChangeEvent, type AbsenceCreationEvent,
 } from "./absence-event.ts"
 import { AbsenceId } from "./absence-id.ts"
 import {
@@ -19,6 +19,7 @@ import { createPeriod, Period } from "./period.ts"
 const absenceFields = {
   absenceId: AbsenceId, organizationId: OrganizationId, creatorId: UserId, assigneeId: UserId,
   period: Period, createdAt: Schema.DateTimeUtc,
+  updatedAt: Schema.DateTimeUtc,   // the instant of the last event; the repository guards on it
 }
 
 export const DraftAbsence = Schema.TaggedStruct("DraftAbsence", { ...absenceFields })
@@ -34,6 +35,32 @@ export type ArchivedAbsence = typeof ArchivedAbsence.Type
 
 export type Absence = DraftAbsence | ActiveAbsence | ArchivedAbsence   // nothing decodes to it
 export type EditableAbsence = DraftAbsence | ActiveAbsence
+
+// The fields every state has, without its tag and its own fields.
+const absenceFieldsOf = ({ absenceId, organizationId, creatorId, assigneeId, period, createdAt, updatedAt }: Absence) =>
+  ({ absenceId, organizationId, creatorId, assigneeId, period, createdAt, updatedAt })
+
+export const initialAbsence = (event: AbsenceCreationEvent): Absence =>
+  DraftAbsence.make({
+    absenceId: event.absenceId, organizationId: event.organizationId, creatorId: event.creatorId,
+    assigneeId: event.assigneeId, period: event.period, createdAt: event.occurredOn, updatedAt: event.occurredOn,
+  })
+
+export type EvolveAbsenceInput = { readonly absence: Absence; readonly event: AbsenceChangeEvent }
+export const evolveAbsence = ({ absence, event }: EvolveAbsenceInput): Absence =>
+  Match.valueTags(event, {
+    AbsenceRescheduledEvent: (event) => ({ ...absence, period: event.period, updatedAt: event.occurredOn }),
+    AbsenceReassignedEvent: (event) => ({ ...absence, assigneeId: event.assigneeId, updatedAt: event.occurredOn }),
+    AbsenceActivatedEvent: (event) => ActiveAbsence.make({ ...absenceFieldsOf(absence), activatedAt: event.occurredOn, updatedAt: event.occurredOn }),
+    // Only an active absence has the activatedAt an archived one keeps; any other state here is a defect upstream.
+    AbsenceArchivedEvent: (event) => Match.valueTags(absence, {
+      DraftAbsence: (absence): Absence => absence,
+      ActiveAbsence: (absence) => ArchivedAbsence.make({
+        ...absenceFieldsOf(absence), activatedAt: absence.activatedAt, archivedAt: event.occurredOn, updatedAt: event.occurredOn,
+      }),
+      ArchivedAbsence: (absence) => absence,
+    }),
+  })
 
 // The transition and its policies take the same input type.
 export type CreateAbsenceInput = {

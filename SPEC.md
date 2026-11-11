@@ -9,11 +9,11 @@ Every `ts` and `prisma` block is an excerpt of the code in this repository, exce
 Stack: effect 4.0.5, Prisma 7.10 with effect-prisma-generator 0.11, TypeScript 5.9 (`strict`, `exactOptionalPropertyTypes`).
 
 Conventions:
-- A function with more than one argument takes one object (`archiveAbsence({ absence, actor, now })`). Single-argument functions stay positional (`publishAbsenceEvent(event)`).
+- A function with more than one argument takes one object (`archiveAbsence({ absence, actor, now })`). Single-argument functions stay positional (`publishDomainEvent(event)`).
 - Data is plain structs: `Schema.Struct` / `Schema.TaggedStruct` + `type X = typeof X.Type`. Values can be spread (`{ ...draft, createdAt }`). Errors are the only classes. Domain errors are `Data.TaggedError` (yieldable, not a schema, so they can't be encoded into a response by accident); HTTP errors are `Schema.TaggedError` (they must encode).
 - Why not `Schema.Class` for data: encoding a class schema checks the value is a real instance. A spread `{ ...instance }` still type-checks but fails at encode with `InvalidType`.
 - Behaviour is named module exports (`archiveAbsence`, `createPeriod`), imported by name, no namespace imports.
-- Greppable names: every function and method names its subject (`getAbsenceById`, `publishAbsenceEvent`), never just `getById` / `publish` / `execute`. A translation names its output and its input (`absenceVisibilityFromReader`).
+- Greppable names: every function and method names its subject (`getAbsenceById`, `publishDomainEvent`), never just `getById` / `publish` / `execute`. A translation names its output and its input (`absenceVisibilityFromReader`).
 - Errors are written out in every signature, never hidden behind a union alias.
 - Time is `DateTime.Utc` (`Schema.DateTimeUtc`) in the model, events, errors, views, and HTTP. `Date` exists only at Prisma. Compare with `DateTime.isLessThan` etc., never `<` or `===`.
 - The domain returns `Result`; a use case lifts it with `Effect.fromResult`. A `Result` can't be yielded inside `Effect.gen`.
@@ -33,8 +33,9 @@ Conventions:
 | Rule order | state (read) → policies in list order → value construction (`createPeriod`) | library |
 | Domain errors | `Data.TaggedError` with rich context (ids, state, dates); no failure events; never sent to clients | ours |
 | Time | `DateTime.Utc` everywhere except Prisma rows; `now` from `DateTime.now` in the use case (`TestClock` in tests); `Utc`, not `Zoned`, until a rule depends on local calendar days | ours |
-| Repository | Narrowing finds + `publishAbsenceEvent(event)`; the repository maps each event to a guarded write, then publishes the event | library (`Patrons.publish`) |
-| Identity | Hybrid: the client may send an `AbsenceId` (prefixed cuid2, format owned by the domain); otherwise the create use case calls `generateAbsenceId()`. A taken id → `AbsenceAlreadyExistsError` | ours |
+| Repository | Narrowing finds + three writes (`insertAbsence`, `updateAbsence`, `deleteAbsence`) that store the state `evolveAbsence` produced, guarded by `before.updatedAt`. The repository never sees an event | Dudycz (decide / evolve), Spring Data (store the aggregate) |
+| Event publishing order | The use case publishes after the write: find → decide → evolve → save → publish. Not atomic | ours |
+| Identity | Hybrid: the client may send an `AbsenceId` (prefixed cuid2, format owned by the domain); otherwise the create use case calls `generateAbsenceId()`. A taken id is a create that lost a race → `AbsenceChangedConcurrentlyError` | ours |
 | Tenancy | Every command, read, and write scoped by `OrganizationId`. The assignee must be a member of the organization: checked on create and reassign | Vernon (`TenantId`) |
 | Events | Past tense + `Event` suffix; carry `occurredOn` | Vernon (past tense), ours (suffix) |
 | Event publishing | `DomainEvents` port only; delivery belongs to the host | ours |
@@ -43,7 +44,7 @@ Conventions:
 | Reads | `AbsenceViews` port returning `AbsenceView`; bypasses the model and the repository. Every method requires an `AbsenceVisibility`, the read rule as data: views filter, never reject, and never see an actor | library (`PatronProfiles`), Vernon (`*QueryService`) |
 | API responses | `AbsenceView` is the response schema. Commands answer with the view (read after write); delete answers 204 | ours |
 | HTTP errors | Every domain error has an HTTP variant (`AbsenceNotFoundHttpError`, …) with a status and a default actionable `message`; no codes. The controller maps 1:1 with `absenceHttpErrorFromAbsenceError`. Retry handling is an edge decision (`catchTag`), never a softened domain error | ours |
-| Tag dispatch | `Match.valueTags` by default. `matchTag` (`lib/match-tag.ts`) when the result type follows the input's tag: the event's write error, the domain error's HTTP variant. No casts | ours |
+| Tag dispatch | `Match.valueTags` by default. `matchTag` (`lib/match-tag.ts`) when the result type follows the input's tag: the domain error's HTTP variant. No casts | ours |
 | Organization | Routes carry `:organizationId`. A group middleware checks membership (`OrganizationMembers`) and provides `CurrentActor`; non-members never reach a handler | ours |
 | Permissions | Always the actor model, no permission gates. `absenceActorFromPermissions` (the only reader of the keys) turns permissions into `AbsenceActor` flags; a policy or the visibility rule decides. The domain never sees a permission key. Own absences and create need no permission | elternportal (`lib/policies`), kgrzybek (`…OnlyByAuthorOrGroupOrganizerRule`), Vernon (`CollaboratorService.moderatorFrom`) |
 
@@ -188,6 +189,7 @@ Each state holds exactly the fields it guarantees. `ActiveAbsence.activatedAt` i
 const absenceFields = {
   absenceId: AbsenceId, organizationId: OrganizationId, creatorId: UserId, assigneeId: UserId,
   period: Period, createdAt: Schema.DateTimeUtc,
+  updatedAt: Schema.DateTimeUtc,   // the instant of the last event; the repository guards on it
 }
 
 export const DraftAbsence = Schema.TaggedStruct("DraftAbsence", { ...absenceFields })
@@ -489,6 +491,41 @@ export type AbsenceEvent = typeof AbsenceEvent.Type
 
 Built with `X.make({...})`. Anything that serialises events encodes through `AbsenceEvent`, never `JSON.stringify`.
 
+### Evolve
+
+A transition decides; `evolve` applies. Each event brings an absence into existence, changes it, or removes it:
+
+```ts
+// absence/domain/absence-event.ts
+// Exclude puts a new event under change until this file names it a creation or a deletion.
+export type AbsenceCreationEvent = AbsenceDraftedEvent
+export type AbsenceDeletionEvent = AbsenceDeletedEvent
+export type AbsenceChangeEvent = Exclude<AbsenceEvent, AbsenceCreationEvent | AbsenceDeletionEvent>
+```
+
+```ts
+// absence/domain/absence.ts
+export const initialAbsence = (event: AbsenceCreationEvent): Absence =>
+  DraftAbsence.make({
+    absenceId: event.absenceId, organizationId: event.organizationId, creatorId: event.creatorId,
+    assigneeId: event.assigneeId, period: event.period, createdAt: event.occurredOn, updatedAt: event.occurredOn,
+  })
+
+export type EvolveAbsenceInput = { readonly absence: Absence; readonly event: AbsenceChangeEvent }
+export const evolveAbsence = ({ absence, event }: EvolveAbsenceInput): Absence =>
+  Match.valueTags(event, {
+    AbsenceRescheduledEvent: (event) => ({ ...absence, period: event.period, updatedAt: event.occurredOn }),
+    AbsenceReassignedEvent: (event) => ({ ...absence, assigneeId: event.assigneeId, updatedAt: event.occurredOn }),
+    AbsenceActivatedEvent: (event) => ActiveAbsence.make({ ...absenceFieldsOf(absence), activatedAt: event.occurredOn, updatedAt: event.occurredOn }),
+…
+  })
+```
+
+- `evolve` is the one statement of what an event means for the state; no SQL restates it.
+- It trusts the transition and never fails: an `AbsenceArchivedEvent` on a non-active absence is a defect upstream and leaves it unchanged.
+- Every branch sets `updatedAt: event.occurredOn`, so the state after `evolve` is exactly the row the repository stores.
+- A deletion has no state after it: the use case hands `deleteAbsence` the state before it.
+
 ---
 
 ## 6. Domain errors (`absence/domain/absence-error.ts`)
@@ -523,13 +560,12 @@ export class AbsenceEditWindowClosedError extends Data.TaggedError("AbsenceEditW
 | `AbsenceEditWindowClosedError` | `absenceId`, `createdAt`, `editableUntil` | `editOnlyInFirstHourPolicy` |
 | `AbsenceOngoingError` | `absenceId`, `period` | `cannotArchiveWhileOngoingPolicy` |
 | `InvalidPeriodError` | `from`, `to` | `createPeriod` |
-| `AbsenceChangedConcurrentlyError` | `absenceId` | `publishAbsenceEvent`: the write guard found no row in the expected state |
-| `AbsenceAlreadyExistsError` | `absenceId` | `publishAbsenceEvent(AbsenceDraftedEvent)`: the id is taken |
+| `AbsenceChangedConcurrentlyError` | `absenceId` | every write: another write came first (a taken id on insert, no row matching the guard on update or delete) |
 
 - State errors name the actual state relative to the one-way lifecycle: *still* = not far enough, *already* = past it. A find raises them without knowing the command, and they read right for every command.
 - `absenceState` is the state's tag (`"DraftAbsence" | "ActiveAbsence"`), the only states an actor policy sees.
 - `AbsenceChangedConcurrentlyError` is expected, not a defect: two requests can act on the same absence between find and write. The client recovers by reloading, so it is typed (409).
-- `AbsenceError`, the union of all fourteen, exists only for the exhaustive HTTP mapper (§11), never in a signature.
+- `AbsenceError`, the union of all thirteen, exists only for the exhaustive HTTP mapper (§11), never in a signature.
 
 ---
 
@@ -541,16 +577,10 @@ The repository port belongs to the domain; ports owned by other modules sit in `
 // absence/domain/absence-repository.ts
 export type FindAbsenceByIdInput = { readonly organizationId: OrganizationId; readonly absenceId: AbsenceId }
 
-// The constraint makes it exhaustive: a new event doesn't compile until it names its write error.
-type OneEntryPerAbsenceEventTag<T extends Record<AbsenceEvent["_tag"], unknown>> = T
-export type AbsenceEventWriteErrors = OneEntryPerAbsenceEventTag<{
-  AbsenceDraftedEvent: AbsenceAlreadyExistsError
-  AbsenceRescheduledEvent: AbsenceChangedConcurrentlyError
-  AbsenceReassignedEvent: AbsenceChangedConcurrentlyError
-  AbsenceActivatedEvent: AbsenceChangedConcurrentlyError
-  AbsenceArchivedEvent: AbsenceChangedConcurrentlyError
-  AbsenceDeletedEvent: AbsenceChangedConcurrentlyError
-}>
+// One write per kind of event, with the states it needs: a create has no state before, a delete none after.
+export type InsertAbsenceInput = { readonly after: Absence }
+export type UpdateAbsenceInput = { readonly before: Absence; readonly after: Absence }
+export type DeleteAbsenceInput = { readonly before: Absence }
 
 export class AbsenceRepository extends Context.Service<AbsenceRepository, {
   findDraftAbsenceById(input: FindAbsenceByIdInput):
@@ -559,11 +589,13 @@ export class AbsenceRepository extends Context.Service<AbsenceRepository, {
     Effect.Effect<ActiveAbsence, AbsenceNotFoundError | AbsenceStillDraftError | AbsenceAlreadyArchivedError>
   findEditableAbsenceById(input: FindAbsenceByIdInput):
     Effect.Effect<EditableAbsence, AbsenceNotFoundError | AbsenceAlreadyArchivedError>
-  publishAbsenceEvent<Tag extends AbsenceEvent["_tag"]>(event: MemberWithTag<AbsenceEvent, Tag>): Effect.Effect<void, AbsenceEventWriteErrors[Tag]>
+  insertAbsence(input: InsertAbsenceInput): Effect.Effect<void, AbsenceChangedConcurrentlyError>
+  updateAbsence(input: UpdateAbsenceInput): Effect.Effect<void, AbsenceChangedConcurrentlyError>
+  deleteAbsence(input: DeleteAbsenceInput): Effect.Effect<void, AbsenceChangedConcurrentlyError>
 }>()("AbsenceRepository") {}
 ```
 
-`publishAbsenceEvent(archivedEvent)` fails only with `AbsenceChangedConcurrentlyError`: TypeScript infers `Tag` from the event, and the tag picks its write error, so each use case's signature stays exact. `MemberWithTag<AbsenceEvent, Tag>` is the event with that tag (`lib/match-tag.ts`, §10).
+Three writes, ever: a new event or transition adds nothing here. Each fails only when another write came first, and the client recovers the same way (reload).
 
 ```ts
 // shared/domain-events.ts
@@ -694,7 +726,7 @@ A plain readonly type per use case. Use a `Schema.Struct` only when a command cr
 
 ### Template
 
-Every command use case is the same three steps: find the narrowed absence, call its transition, publish the event.
+Every command use case is the same five steps: find the narrowed absence, call its transition, `evolve` the event onto it, save, publish the event. The write follows the event's kind: a create calls `insertAbsence({ after: initialAbsence(event) })`, a change `updateAbsence({ before, after: evolveAbsence(…) })`, a delete `deleteAbsence({ before })`. Publish comes after the write, so a failed write publishes nothing.
 
 ```ts
 // absence/application/archive-absence-service.ts
@@ -708,12 +740,14 @@ export class ArchiveAbsenceService extends Context.Service<ArchiveAbsenceService
 }>()("ArchiveAbsenceService") {
   static layer = Layer.effect(ArchiveAbsenceService, Effect.gen(function* () {
     const absenceRepository = yield* AbsenceRepository
+    const domainEvents = yield* DomainEvents
     return ArchiveAbsenceService.of({
       archiveAbsence: Effect.fn("ArchiveAbsenceService.archiveAbsence")(function* ({ organizationId, actor, absenceId }) {
         const now = yield* DateTime.now
         const absence = yield* absenceRepository.findActiveAbsenceById({ organizationId, absenceId })
         const event = yield* Effect.fromResult(archiveAbsence({ absence, actor, now }))
-        yield* absenceRepository.publishAbsenceEvent(event)
+        yield* absenceRepository.updateAbsence({ before: absence, after: evolveAbsence({ absence, event }) })
+        yield* domainEvents.publishDomainEvent(event)
       }),
     })
   }))
@@ -743,7 +777,8 @@ export type CreateAbsenceCommand = {
         // loaded every time, even when the actor may assign anyone: skipping it would move the rule here
         const assigneeIsOrganizationMember = yield* organizationMembers.isOrganizationMember({ organizationId, userId: assigneeId })
         const event = yield* Effect.fromResult(createAbsence({ absenceId, organizationId, actor, assigneeId, assigneeIsOrganizationMember, from, to, now }))
-        yield* absenceRepository.publishAbsenceEvent(event)
+        yield* absenceRepository.insertAbsence({ after: initialAbsence(event) })
+        yield* domainEvents.publishDomainEvent(event)
         return absenceId
       }),
 ```
@@ -752,7 +787,7 @@ export type CreateAbsenceCommand = {
 
 ```text
 CreateAbsenceService.createAbsence({ organizationId, actor, absenceId?, assigneeId, from, to })
-  : Effect<AbsenceId, AssigneeNotInOrganizationError | NotAllowedToAssignAbsenceError | InvalidPeriodError | AbsenceAlreadyExistsError>
+  : Effect<AbsenceId, AssigneeNotInOrganizationError | NotAllowedToAssignAbsenceError | InvalidPeriodError | AbsenceChangedConcurrentlyError>
 ├─ absenceId ?? generateAbsenceId(): AbsenceId
 ├─ OrganizationMembers.isOrganizationMember({ organizationId, userId: assigneeId })
 │    : Effect<boolean>   → assigneeIsOrganizationMember
@@ -760,8 +795,10 @@ CreateAbsenceService.createAbsence({ organizationId, actor, absenceId?, assignee
 │    : Result<AbsenceDraftedEvent, AssigneeNotInOrganizationError | NotAllowedToAssignAbsenceError | InvalidPeriodError>
 │  ├─ checkPolicies(createAbsencePolicies, input)
 │  └─ createPeriod({ from, to })
-└─ AbsenceRepository.publishAbsenceEvent(event)
-     : Effect<void, AbsenceAlreadyExistsError>
+├─ initialAbsence(event): Absence
+├─ AbsenceRepository.insertAbsence({ after })
+│    : Effect<void, AbsenceChangedConcurrentlyError>
+└─ DomainEvents.publishDomainEvent(event): Effect<void>
 
 RescheduleAbsenceService.rescheduleAbsence({ organizationId, actor, absenceId, from, to })
 ├─ AbsenceRepository.findEditableAbsenceById({ organizationId, absenceId })
@@ -770,8 +807,10 @@ RescheduleAbsenceService.rescheduleAbsence({ organizationId, actor, absenceId, f
 │    : Result<AbsenceRescheduledEvent, NotAllowedToEditAbsenceError | AbsenceEditWindowClosedError | InvalidPeriodError>
 │  ├─ checkPolicies(rescheduleAbsencePolicies, input)
 │  └─ createPeriod({ from, to })
-└─ AbsenceRepository.publishAbsenceEvent(event)
-     : Effect<void, AbsenceChangedConcurrentlyError>
+├─ evolveAbsence({ absence, event }): Absence
+├─ AbsenceRepository.updateAbsence({ before, after })
+│    : Effect<void, AbsenceChangedConcurrentlyError>
+└─ DomainEvents.publishDomainEvent(event): Effect<void>
 
 ReassignAbsenceService.reassignAbsence({ organizationId, actor, absenceId, assigneeId })
 ├─ AbsenceRepository.findEditableAbsenceById({ organizationId, absenceId })
@@ -781,32 +820,39 @@ ReassignAbsenceService.reassignAbsence({ organizationId, actor, absenceId, assig
 ├─ reassignAbsence({ absence, actor, assigneeId, assigneeIsOrganizationMember, now })
 │    : Result<AbsenceReassignedEvent, NotAllowedToEditAbsenceError | AssigneeNotInOrganizationError | NotAllowedToAssignAbsenceError | AbsenceEditWindowClosedError>
 │  └─ checkPolicies(reassignAbsencePolicies, input)
-└─ AbsenceRepository.publishAbsenceEvent(event)
-     : Effect<void, AbsenceChangedConcurrentlyError>
+├─ evolveAbsence({ absence, event }): Absence
+├─ AbsenceRepository.updateAbsence({ before, after })
+│    : Effect<void, AbsenceChangedConcurrentlyError>
+└─ DomainEvents.publishDomainEvent(event): Effect<void>
 
 ActivateAbsenceService.activateAbsence({ organizationId, actor, absenceId })
 ├─ AbsenceRepository.findDraftAbsenceById({ organizationId, absenceId })
 │    : Effect<DraftAbsence, AbsenceNotFoundError | AbsenceAlreadyActiveError | AbsenceAlreadyArchivedError>
 ├─ activateAbsence({ absence, actor, now })
 │    : Result<AbsenceActivatedEvent, NotAbsenceCreatorError>
-└─ AbsenceRepository.publishAbsenceEvent(event)
-     : Effect<void, AbsenceChangedConcurrentlyError>
+├─ evolveAbsence({ absence, event }): Absence
+├─ AbsenceRepository.updateAbsence({ before, after })
+│    : Effect<void, AbsenceChangedConcurrentlyError>
+└─ DomainEvents.publishDomainEvent(event): Effect<void>
 
 ArchiveAbsenceService.archiveAbsence({ organizationId, actor, absenceId })
 ├─ AbsenceRepository.findActiveAbsenceById({ organizationId, absenceId })
 │    : Effect<ActiveAbsence, AbsenceNotFoundError | AbsenceStillDraftError | AbsenceAlreadyArchivedError>
 ├─ archiveAbsence({ absence, actor, now })
 │    : Result<AbsenceArchivedEvent, NotAllowedToEditAbsenceError | AbsenceOngoingError>
-└─ AbsenceRepository.publishAbsenceEvent(event)
-     : Effect<void, AbsenceChangedConcurrentlyError>
+├─ evolveAbsence({ absence, event }): Absence
+├─ AbsenceRepository.updateAbsence({ before, after })
+│    : Effect<void, AbsenceChangedConcurrentlyError>
+└─ DomainEvents.publishDomainEvent(event): Effect<void>
 
 DeleteAbsenceService.deleteAbsence({ organizationId, actor, absenceId })
 ├─ AbsenceRepository.findEditableAbsenceById({ organizationId, absenceId })
 │    : Effect<EditableAbsence, AbsenceNotFoundError | AbsenceAlreadyArchivedError>
 ├─ deleteAbsence({ absence, actor, now })
 │    : Result<AbsenceDeletedEvent, NotAllowedToDeleteAbsenceError>
-└─ AbsenceRepository.publishAbsenceEvent(event)
-     : Effect<void, AbsenceChangedConcurrentlyError>
+├─ AbsenceRepository.deleteAbsence({ before })
+│    : Effect<void, AbsenceChangedConcurrentlyError>
+└─ DomainEvents.publishDomainEvent(event): Effect<void>
 ```
 
 Every transition call is wrapped in `Effect.fromResult(…)` in the code.
@@ -834,6 +880,7 @@ model Absence {
   to             DateTime
   status         AbsenceStatus
   createdAt      DateTime // AbsenceDraftedEvent.occurredOn; no @default
+  updatedAt      DateTime // the last event's occurredOn; the write guard. No @updatedAt
   activatedAt    DateTime?
   archivedAt     DateTime?
 
@@ -855,7 +902,7 @@ Each find checks the row's `status` first, then decodes only the state it return
 | Row with an allowed `status` doesn't decode (e.g. `active` with a null `activatedAt`, a bad id) | die | corrupt data: no caller can recover |
 | Unknown `status` | die | `Match.exhaustive` throws |
 
-No row schemas. Prisma's `select` types the row; the repository reshapes it into the domain shape and decodes with the domain schema, which checks what Prisma's types don't (non-null `activatedAt`, brands, the id pattern). Only one direction is needed: writes go event → write.
+No row schemas. Prisma's `select` types the row; the repository reshapes it into the domain shape and decodes with the domain schema, which checks what Prisma's types don't (non-null `activatedAt`, brands, the id pattern). Writes go the other way, state → row (`absenceRowFromState`, below).
 
 ```ts
 // lib/with-optional-tag.ts
@@ -878,7 +925,7 @@ export const dateTimeUtcFromDate = <D extends Date | null>(date: D): D extends D
 // No archivedAt: no find returns an archived absence.
 const absenceSelect = {
   id: true, organizationId: true, creatorId: true, assigneeId: true,
-  from: true, to: true, status: true, createdAt: true, activatedAt: true,
+  from: true, to: true, status: true, createdAt: true, updatedAt: true, activatedAt: true,
 } satisfies Prisma.AbsenceSelect
 
 type AbsenceRow = Prisma.AbsenceGetPayload<{ select: typeof absenceSelect }>
@@ -897,6 +944,7 @@ const absenceFieldsFromRow = (row: AbsenceRow) => ({
   assigneeId: row.assigneeId,
   period: { from: dateTimeUtcFromDate(row.from), to: dateTimeUtcFromDate(row.to) },
   createdAt: dateTimeUtcFromDate(row.createdAt),
+  updatedAt: dateTimeUtcFromDate(row.updatedAt),
 })
 
 // A row that doesn't decode is corrupt: die.
@@ -951,70 +999,53 @@ const decodeActiveAbsence = (row: AbsenceRow) =>
 ### Writes
 
 ```text
-PrismaAbsenceRepository.publishAbsenceEvent(event)
-├─ writeAbsenceEvent(event)                   matchTag: one write per event
-│  ├─ create → PrismaUniqueConstraintError → AbsenceAlreadyExistsError
-│  └─ guarded update / delete → PrismaRecordNotFoundError → AbsenceChangedConcurrentlyError
-└─ DomainEvents.publishDomainEvent(event)     only after the write succeeded
+PrismaAbsenceRepository.updateAbsence({ before, after })
+└─ prisma.absence.update({ where: absenceGuard(before), data: absenceRowFromState(after) })
+   └─ PrismaRecordNotFoundError → AbsenceChangedConcurrentlyError
 ```
 
-| Event | Write | Guard (`where`, plus `id` and `organizationId`) |
+| Write | Prisma | Expected error → domain error |
 |---|---|---|
-| `AbsenceDraftedEvent` | `create { status: "draft", creatorId, assigneeId, from, to, createdAt: occurredOn }` | — |
-| `AbsenceRescheduledEvent` | `update { from, to }` | `status in ["draft", "active"]` |
-| `AbsenceReassignedEvent` | `update { assigneeId }` | `status in ["draft", "active"]` |
-| `AbsenceActivatedEvent` | `update { status: "active", activatedAt: occurredOn }` | `status: "draft"` |
-| `AbsenceArchivedEvent` | `update { status: "archived", archivedAt: occurredOn }` | `status: "active"` |
-| `AbsenceDeletedEvent` | `delete` | `status in ["draft", "active"]` |
+| `insertAbsence({ after })` | `create { absenceRowFromState(after) }` | `PrismaUniqueConstraintError` (P2002, `id` is the only unique constraint) → `AbsenceChangedConcurrentlyError` |
+| `updateAbsence({ before, after })` | `update { where: absenceGuard(before), data: absenceRowFromState(after) }` | `PrismaRecordNotFoundError` (P2025) → `AbsenceChangedConcurrentlyError` |
+| `deleteAbsence({ before })` | `delete { where: absenceGuard(before) }` | `PrismaRecordNotFoundError` (P2025) → `AbsenceChangedConcurrentlyError` |
 
-Prisma errors: the port declares no infrastructure errors, so every Prisma error dies except the one each operation expects.
-
-| Operation | Expected Prisma error | Becomes |
-|---|---|---|
-| `findUniqueOrThrow` | `PrismaRecordNotFoundError` (P2025) | `AbsenceNotFoundError` |
-| `create` | `PrismaUniqueConstraintError` (P2002) | `AbsenceAlreadyExistsError`: `id` is the only unique constraint |
-| guarded `update` / `delete` | `PrismaRecordNotFoundError` (P2025) | `AbsenceChangedConcurrentlyError` |
-| any | anything else (connection, validation, …) | die |
+Every other Prisma error dies: the port declares no infrastructure errors.
 
 ```ts
 // absence/infrastructure/prisma-absence-repository.ts
-  // Out is the port's error map, given explicitly: inferred from the writes, it wouldn't match AbsenceEventWriteErrors[Tag] for a generic Tag.
-  // A guarded write that matches no row means the absence changed or vanished since the find. Any other Prisma error dies.
-  const writeAbsenceEvent = matchTag<AbsenceEvent>()<{
-    readonly [Tag in AbsenceEvent["_tag"]]: Effect.Effect<void, AbsenceEventWriteErrors[Tag]>
-  }>({
-    AbsenceArchivedEvent: (event) =>
-      prisma.absence.update({
-        where: { id: event.absenceId, organizationId: event.organizationId, status: "active" },
-        data: { status: "archived", archivedAt: DateTime.toDateUtc(event.occurredOn) },
-        select: { id: true },
-      }).pipe(
-        Effect.catchTag(
-          "PrismaRecordNotFoundError",
-          () => new AbsenceChangedConcurrentlyError({ absenceId: event.absenceId }),
-          (error) => Effect.die(error),
-        ),
-        Effect.asVoid,
-      ),
-    // …one per event, as in the table
+const absenceRowFromState = (absence: Absence): Prisma.AbsenceUncheckedCreateInput =>
+  Match.valueTags(absence, {
+    DraftAbsence: (absence) => ({ ...absenceColumnsFromFields(absence), status: AbsenceStatus.draft, activatedAt: null, archivedAt: null }),
+…
   })
 
-  const publishAbsenceEvent = Effect.fn("PrismaAbsenceRepository.publishAbsenceEvent")(
-    function* <Tag extends AbsenceEvent["_tag"]>(event: MemberWithTag<AbsenceEvent, Tag>) {
-      yield* writeAbsenceEvent(event)
-      yield* domainEvents.publishDomainEvent(event)   // not atomic with the write
+// the row the write must still find: before's identity and updatedAt
+const absenceGuard = (before: Absence) =>
+  ({ id: before.absenceId, organizationId: before.organizationId, updatedAt: DateTime.toDateUtc(before.updatedAt) })
+…
+  const updateAbsence = Effect.fn("PrismaAbsenceRepository.updateAbsence")(
+    function* ({ before, after }: UpdateAbsenceInput) {
+      yield* prisma.absence.update({ where: absenceGuard(before), data: absenceRowFromState(after), select: { id: true } }).pipe(
+        Effect.catchTag(
+          "PrismaRecordNotFoundError",
+          () => new AbsenceChangedConcurrentlyError({ absenceId: before.absenceId }),
+          (error) => Effect.die(error),
+        ),
+      )
     },
   )
 ```
 
+- The guard is `before`'s identity and `updatedAt`: it catches every write between find and save, whatever field it touched.
+- `AbsenceStatus.draft`, not `"draft"`: `Match.valueTags` infers each branch on its own, and a bare string literal widens to `string`.
 - `Effect.catchTag(tag, f, orElse)`: the third argument handles every other error. Pass `(error) => Effect.die(error)`, not `Effect.die`: its `unknown` parameter makes TypeScript infer the error type as `unknown`, and the tag no longer type-checks.
 - `update` / `delete` with the guard in `where` throw P2025 when nothing matches. Not `updateMany` + `count === 0`.
-- Writes `select: { id: true }`: nothing is read back; the controller reads the view.
-- Each write is inline in `matchTag`'s handlers: `event` is typed per handler, and a write that fails with a different error than `AbsenceEventWriteErrors` names doesn't compile at that handler.
+- Writes `select: { id: true }`: nothing is read back; the caller has `after`, the controller reads the view.
 - Every `DateTime.Utc` is converted with `DateTime.toDateUtc`.
-- No cast. A missing write, an unknown tag, or a write that fails with a different error than `AbsenceEventWriteErrors` names doesn't compile.
+- Cost: `updatedAt` has millisecond precision, so two writes of one row within the same millisecond could pass each other's guard.
 
-The dispatch is `matchTag`, the one helper for tag dispatch whose result type follows the tag:
+`matchTag` is the one helper for tag dispatch whose result type follows the tag:
 
 ```ts
 // lib/match-tag.ts
@@ -1035,10 +1066,10 @@ export const matchTag = <U extends Tagged>() =>
 ```
 
 - `matchTag<U>()(handlers)`: one handler per tag of `U`. The result is `<Tag>(value: MemberWithTag<U, Tag>) => Out[Tag]`. `Out` is inferred from the handlers unless given.
-- Give `Out` when a declared type already fixes the result, as the port does here. Otherwise infer it (§11).
+- Give `Out` when a declared type already fixes the result. Otherwise infer it, as the HTTP mapper does (§11).
 - `Out extends` rejects a missing tag; the `never` part rejects an unknown one.
 - Curried, because TypeScript can't take `U` explicitly and infer `Out` in the same call.
-- Not `Match.valueTags`: it returns the union of every branch's result, which a generic signature only accepts with a cast. `Match.valueTags` stays the default when the union is fine (the policies, §4).
+- Not `Match.valueTags`: it returns the union of every branch's result, which a generic signature only accepts with a cast. `Match.valueTags` stays the default when the union is fine (the policies, §4; `evolveAbsence`, §5).
 
 ---
 
@@ -1157,7 +1188,6 @@ export const absenceHttpErrorFromAbsenceError = matchTag<AbsenceError>()({
 | `AbsenceEditWindowClosedError` | 409 | Absences can only be edited within one hour of creation. |
 | `AbsenceOngoingError` | 409 | This absence is in progress. Archive it after it ends. |
 | `AbsenceChangedConcurrentlyError` | 409 | Someone else changed this absence. Reload and try again. |
-| `AbsenceAlreadyExistsError` | 409 | An absence with this id already exists. |
 
 ### Endpoints (`absence/http/absence-api.ts`)
 
@@ -1165,7 +1195,7 @@ Paths are relative to the group prefix `/organizations/:organizationId`. Instant
 
 | Endpoint | Name | Success | HTTP errors, in check order (without the `HttpError` suffix) |
 |---|---|---|---|
-| `POST /absences` `{ absenceId?, assigneeId, from, to }` | `createAbsence` | 201 view | `AssigneeNotInOrganization`, `NotAllowedToAssignAbsence`, `InvalidPeriod`, `AbsenceAlreadyExists`, `AbsenceNotFound` (read-back) |
+| `POST /absences` `{ absenceId?, assigneeId, from, to }` | `createAbsence` | 201 view | `AssigneeNotInOrganization`, `NotAllowedToAssignAbsence`, `InvalidPeriod`, `AbsenceChangedConcurrently` (taken id), `AbsenceNotFound` (read-back) |
 | `PUT /absences/:absenceId/period` `{ from, to }` | `rescheduleAbsence` | 200 view | `AbsenceNotFound`, `AbsenceAlreadyArchived`, `NotAllowedToEditAbsence`, `AbsenceEditWindowClosed`, `InvalidPeriod`, `AbsenceChangedConcurrently` |
 | `PUT /absences/:absenceId/assignee` `{ assigneeId }` | `reassignAbsence` | 200 view | `AbsenceNotFound`, `AbsenceAlreadyArchived`, `NotAllowedToEditAbsence`, `AssigneeNotInOrganization`, `NotAllowedToAssignAbsence`, `AbsenceEditWindowClosed`, `AbsenceChangedConcurrently` |
 | `POST /absences/:absenceId/activate` | `activateAbsence` | 200 view | `AbsenceNotFound`, `AbsenceAlreadyActive`, `AbsenceAlreadyArchived`, `NotAbsenceCreator`, `AbsenceChangedConcurrently` |
@@ -1283,7 +1313,7 @@ export const AbsenceController = HttpApiBuilder.group(Api, "absences", Effect.fn
 
 ### Retries
 
-Retries and idempotency are decided here, per endpoint; the domain stays truthful (`AbsenceAlreadyArchivedError`, `AbsenceAlreadyExistsError`). The example code doesn't soften any endpoint. To make one retry-safe, catch the tag and answer as if it succeeded:
+Retries and idempotency are decided here, per endpoint; the domain stays truthful (`AbsenceAlreadyArchivedError`, `AbsenceChangedConcurrentlyError`). The example code doesn't soften any endpoint. To make one retry-safe, catch the tag and answer as if it succeeded:
 
 ```ts
 // not in the example code: an opt-in, retry-safe archive handler
@@ -1296,7 +1326,7 @@ archiveAbsence: ({ params }) => Effect.gen(function* () {
 }).pipe(Effect.mapError(absenceHttpErrorFromAbsenceError)),
 ```
 
-A create retried with the same client-sent `absenceId` does the same with `AbsenceAlreadyExistsError`. The visibility then decides: the same creator gets the view, and an id that belongs to someone else's invisible absence gets 404 from the read-back.
+A create retried with the same client-sent `absenceId` does the same with `AbsenceChangedConcurrentlyError`. The visibility then decides: the same creator gets the view, and an id that belongs to someone else's invisible absence gets 404 from the read-back.
 
 ---
 
@@ -1318,7 +1348,7 @@ export const AbsenceHttpLayer = AbsenceController.pipe(
 - No merged "all use cases" layer for other entry points: a listener or job provides only the service it uses.
 - The middleware layer is `provideMerge`d: the HTTP router resolves it when it builds the routes.
 
-Tests (`test/`), at the lowest place that owns each rule. Each was checked by breaking its rule and watching it fail.
+Tests (`test/`), at the lowest place that owns each rule. Fixtures (`test/support.ts`) are the events that lead to a state, folded through `initialAbsence` and `evolveAbsence`. Each was checked by breaking its rule and watching it fail.
 
 | Rule | Test |
 |---|---|
@@ -1330,17 +1360,17 @@ Tests (`test/`), at the lowest place that owns each rule. Each was checked by br
 | Domain error → HTTP variant and status | `absence-translations.test.ts` |
 | `matchTag` dispatch; result typed by tag; missing or unknown tag rejected (`@ts-expect-error`) | `match-tag.test.ts` |
 | Finds let through only their states; foreign organization; corrupt row dies | `prisma-absence-repository.test.ts`, real Postgres |
-| Guarded writes: wrong state → `AbsenceChangedConcurrentlyError`, nothing published; taken id → `AbsenceAlreadyExistsError` | `prisma-absence-repository.test.ts`, real Postgres |
+| Writes: a taken id, a stale update, a stale delete → `AbsenceChangedConcurrentlyError` | `prisma-absence-repository.test.ts`, real Postgres |
 | Visibility `where` per reader: own / others' draft / assigned / related / unrelated / other organization | `prisma-absence-views.test.ts`, real Postgres |
 | The whole path: middleware, permissions, read-back, 201, error mapping, `TestClock` | `absence-http.test.ts`, `HttpApiTest` against the real handlers and Postgres |
 
-No separate tests for transitions whose policies are tested, use cases that only load → call → publish, or schemas: the types prove them.
+No separate tests for transitions whose policies are tested, use cases that only find → decide → evolve → save → publish, or schemas: the types prove them.
 
 ---
 
 ## 13. Open
 
-1. Write + publish are not atomic in `PrismaAbsenceRepository.publishAbsenceEvent`. Same gap as the library; an outbox in the same transaction closes it.
+1. Write + publish are not atomic: the use case publishes after the write, so a crash in between loses the event. An outbox row in the write's transaction closes it.
 2. Edit window for permitted users: it counts from creation, so they can only reschedule or reassign others' absences within that first hour. Archive and delete aren't windowed.
 3. Commands vs visibility: a command on an absence the actor can't see answers 409 or 403, while a read answers 404. It reveals that an absence with a known id exists, and its state. To hide it, the finds would take the actor's visibility (not visible → `AbsenceNotFoundError`) before the state check.
 4. System intents (a nightly job archiving ended absences): an actor-less transition with its own policy list, or an actor variant every policy handles. Decide with the first real case.

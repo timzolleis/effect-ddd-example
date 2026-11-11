@@ -1,10 +1,16 @@
+import { assert } from "@effect/vitest"
 import { PrismaPg } from "@prisma/adapter-pg"
 import { DateTime, Effect, Layer, Redacted } from "effect"
 import { PrismaClient } from "~prisma/client"
 import { layerFromPrismaClient, PrismaService } from "~prisma/effect"
 import type { AbsenceActor } from "../src/absence/domain/absence-actor.ts"
+import {
+  AbsenceActivatedEvent, AbsenceArchivedEvent, AbsenceDraftedEvent, type AbsenceChangeEvent, type AbsenceCreationEvent,
+} from "../src/absence/domain/absence-event.ts"
 import { AbsenceId, generateAbsenceId } from "../src/absence/domain/absence-id.ts"
-import type { ActiveAbsence, DraftAbsence } from "../src/absence/domain/absence.ts"
+import {
+  evolveAbsence, initialAbsence, type Absence, type ActiveAbsence, type ArchivedAbsence, type DraftAbsence,
+} from "../src/absence/domain/absence.ts"
 import { AuthMiddleware, NotAuthenticatedHttpError } from "../src/lib/auth-middleware.ts"
 import { CurrentUser } from "../src/shared/current-user.ts"
 import { DomainEvents, type DomainEvent } from "../src/shared/domain-events.ts"
@@ -27,16 +33,39 @@ export const makeActor = (overrides: Partial<AbsenceActor> & Pick<AbsenceActor, 
   relatedUserIds: new Set(), ...overrides,
 })
 
-const absenceFieldsFor = (overrides: { creatorId?: UserId; assigneeId?: UserId; createdAt?: DateTime.Utc }) => ({
-  absenceId: generateAbsenceId(), organizationId,
-  creatorId: overrides.creatorId ?? alice, assigneeId: overrides.assigneeId ?? alice,
-  period: { from: at("2026-03-01T00:00:00Z"), to: at("2026-03-02T00:00:00Z") },
-  createdAt: overrides.createdAt ?? at("2026-02-01T10:00:00Z"),
-})
-export const makeDraftAbsence = (overrides: Parameters<typeof absenceFieldsFor>[0] = {}): DraftAbsence =>
-  ({ _tag: "DraftAbsence", ...absenceFieldsFor(overrides) })
-export const makeActiveAbsence = (overrides: Parameters<typeof absenceFieldsFor>[0] = {}): ActiveAbsence =>
-  ({ _tag: "ActiveAbsence", ...absenceFieldsFor(overrides), activatedAt: at("2026-02-01T10:05:00Z") })
+// A fixture is the events that lead to its state, never a state written by hand.
+const absenceAfter = (creation: AbsenceCreationEvent, ...changes: ReadonlyArray<AbsenceChangeEvent>): Absence =>
+  changes.reduce((absence, event) => evolveAbsence({ absence, event }), initialAbsence(creation))
+
+type AbsenceFixtureInput = { readonly creatorId?: UserId; readonly assigneeId?: UserId; readonly createdAt?: DateTime.Utc }
+
+const makeDraftedEvent = ({ creatorId = alice, assigneeId = alice, createdAt = at("2026-02-01T10:00:00Z") }: AbsenceFixtureInput) =>
+  AbsenceDraftedEvent.make({
+    absenceId: generateAbsenceId(), organizationId, actorId: creatorId, occurredOn: createdAt, creatorId, assigneeId,
+    period: { from: at("2026-03-01T00:00:00Z"), to: at("2026-03-02T00:00:00Z") },
+  })
+const makeActivatedEvent = (drafted: AbsenceDraftedEvent, occurredOn: DateTime.Utc) =>
+  AbsenceActivatedEvent.make({ absenceId: drafted.absenceId, organizationId, actorId: drafted.creatorId, occurredOn })
+const makeArchivedEvent = (drafted: AbsenceDraftedEvent, occurredOn: DateTime.Utc) =>
+  AbsenceArchivedEvent.make({ absenceId: drafted.absenceId, organizationId, actorId: drafted.creatorId, occurredOn })
+
+export const makeDraftAbsence = (input: AbsenceFixtureInput = {}): DraftAbsence => {
+  const absence = absenceAfter(makeDraftedEvent(input))
+  assert(absence._tag === "DraftAbsence")
+  return absence
+}
+export const makeActiveAbsence = ({ activatedOn = at("2026-02-01T10:05:00Z"), ...input }: AbsenceFixtureInput & { readonly activatedOn?: DateTime.Utc } = {}): ActiveAbsence => {
+  const drafted = makeDraftedEvent(input)
+  const absence = absenceAfter(drafted, makeActivatedEvent(drafted, activatedOn))
+  assert(absence._tag === "ActiveAbsence")
+  return absence
+}
+export const makeArchivedAbsence = (input: AbsenceFixtureInput = {}): ArchivedAbsence => {
+  const drafted = makeDraftedEvent(input)
+  const absence = absenceAfter(drafted, makeActivatedEvent(drafted, at("2026-02-01T10:05:00Z")), makeArchivedEvent(drafted, at("2026-03-03T00:00:00Z")))
+  assert(absence._tag === "ArchivedAbsence")
+  return absence
+}
 
 export const unknownAbsenceId = AbsenceId.make("abs_zzzzzzzzzzzzzzzzzzzzzzzz")
 

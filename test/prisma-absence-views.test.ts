@@ -29,7 +29,7 @@ const seed = Effect.promise(async () => {
     await prismaClient.absence.create({
       data: {
         id, organizationId, ...row,
-        from: new Date("2026-03-01T00:00:00Z"), to: new Date("2026-03-02T00:00:00Z"), createdAt: new Date("2026-02-01T10:00:00Z"),
+        from: new Date("2026-03-01T00:00:00Z"), to: new Date("2026-03-02T00:00:00Z"), createdAt: new Date("2026-02-01T10:00:00Z"), updatedAt: new Date("2026-02-01T10:00:00Z"),
         activatedAt: row.status === "draft" ? null : new Date("2026-02-01T10:05:00Z"),
         archivedAt: row.status === "archived" ? new Date("2026-03-03T00:00:00Z") : null,
       },

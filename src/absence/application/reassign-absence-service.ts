@@ -1,4 +1,5 @@
 import { Context, DateTime, Effect, Layer } from "effect"
+import { DomainEvents } from "../../shared/domain-events.ts"
 import type { OrganizationId, UserId } from "../../shared/ids.ts"
 import { OrganizationMembers } from "../../shared/organization-members.ts"
 import type { AbsenceActor } from "../domain/absence-actor.ts"
@@ -8,7 +9,7 @@ import type {
 } from "../domain/absence-error.ts"
 import type { AbsenceId } from "../domain/absence-id.ts"
 import { AbsenceRepository } from "../domain/absence-repository.ts"
-import { reassignAbsence } from "../domain/absence.ts"
+import { evolveAbsence, reassignAbsence } from "../domain/absence.ts"
 
 export type ReassignAbsenceCommand = {
   readonly organizationId: OrganizationId; readonly actor: AbsenceActor; readonly absenceId: AbsenceId; readonly assigneeId: UserId
@@ -23,6 +24,7 @@ export class ReassignAbsenceService extends Context.Service<ReassignAbsenceServi
 }>()("ReassignAbsenceService") {
   static layer = Layer.effect(ReassignAbsenceService, Effect.gen(function* () {
     const absenceRepository = yield* AbsenceRepository
+    const domainEvents = yield* DomainEvents
     const organizationMembers = yield* OrganizationMembers
     return ReassignAbsenceService.of({
       reassignAbsence: Effect.fn("ReassignAbsenceService.reassignAbsence")(function* ({ organizationId, actor, absenceId, assigneeId }) {
@@ -31,7 +33,8 @@ export class ReassignAbsenceService extends Context.Service<ReassignAbsenceServi
         // after the find, so a missing absence is 404 before anything about the assignee
         const assigneeIsOrganizationMember = yield* organizationMembers.isOrganizationMember({ organizationId, userId: assigneeId })
         const event = yield* Effect.fromResult(reassignAbsence({ absence, actor, assigneeId, assigneeIsOrganizationMember, now }))
-        yield* absenceRepository.publishAbsenceEvent(event)
+        yield* absenceRepository.updateAbsence({ before: absence, after: evolveAbsence({ absence, event }) })
+        yield* domainEvents.publishDomainEvent(event)
       }),
     })
   }))

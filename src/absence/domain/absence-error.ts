@@ -37,13 +37,12 @@ export class InvalidPeriodError extends Data.TaggedError("InvalidPeriodError")<{
   readonly from: DateTime.Utc; readonly to: DateTime.Utc
 }> {}
 
-// raised by publishAbsenceEvent
+// raised by the writes: another write came first (a taken id on insert, a changed row on update or delete)
 export class AbsenceChangedConcurrentlyError extends Data.TaggedError("AbsenceChangedConcurrentlyError")<{ readonly absenceId: AbsenceId }> {}
-export class AbsenceAlreadyExistsError extends Data.TaggedError("AbsenceAlreadyExistsError")<{ readonly absenceId: AbsenceId }> {}
 
 // Only for the exhaustive HTTP mapper; never in a signature.
 export type AbsenceError =
   | AbsenceNotFoundError | AbsenceStillDraftError | AbsenceAlreadyActiveError | AbsenceAlreadyArchivedError
   | NotAbsenceCreatorError | NotAllowedToEditAbsenceError | NotAllowedToDeleteAbsenceError
   | AssigneeNotInOrganizationError | NotAllowedToAssignAbsenceError | AbsenceEditWindowClosedError
-  | AbsenceOngoingError | InvalidPeriodError | AbsenceChangedConcurrentlyError | AbsenceAlreadyExistsError
+  | AbsenceOngoingError | InvalidPeriodError | AbsenceChangedConcurrentlyError
