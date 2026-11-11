@@ -38,3 +38,8 @@ export const AbsenceEvent = Schema.Union([
   AbsenceActivatedEvent, AbsenceArchivedEvent, AbsenceDeletedEvent,
 ])
 export type AbsenceEvent = typeof AbsenceEvent.Type
+
+// Exclude puts a new event under change until this file names it a creation or a deletion.
+export type AbsenceCreationEvent = AbsenceDraftedEvent
+export type AbsenceDeletionEvent = AbsenceDeletedEvent
+export type AbsenceChangeEvent = Exclude<AbsenceEvent, AbsenceCreationEvent | AbsenceDeletionEvent>

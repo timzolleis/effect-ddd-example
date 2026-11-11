@@ -6,7 +6,7 @@ import { UserId } from "../../shared/ids.ts"
 import { AbsenceId } from "../domain/absence-id.ts"
 import { AbsenceView } from "../view/absence-views.ts"
 import {
-  AbsenceAlreadyActiveHttpError, AbsenceAlreadyArchivedHttpError, AbsenceAlreadyExistsHttpError,
+  AbsenceAlreadyActiveHttpError, AbsenceAlreadyArchivedHttpError,
   AbsenceChangedConcurrentlyHttpError, AbsenceEditWindowClosedHttpError, AbsenceNotFoundHttpError, AbsenceOngoingHttpError,
   AbsenceStillDraftHttpError, AssigneeNotInOrganizationHttpError, InvalidPeriodHttpError, NotAbsenceCreatorHttpError,
   NotAllowedToAssignAbsenceHttpError, NotAllowedToDeleteAbsenceHttpError, NotAllowedToEditAbsenceHttpError,
@@ -27,7 +27,7 @@ export class AbsenceApiGroup extends HttpApiGroup.make("absences")
       }),
       success: AbsenceView.pipe(HttpApiSchema.status(201)),
       error: [
-        AssigneeNotInOrganizationHttpError, NotAllowedToAssignAbsenceHttpError, InvalidPeriodHttpError, AbsenceAlreadyExistsHttpError,
+        AssigneeNotInOrganizationHttpError, NotAllowedToAssignAbsenceHttpError, InvalidPeriodHttpError, AbsenceChangedConcurrentlyHttpError,
         AbsenceNotFoundHttpError, // read-back, if the absence is deleted before it
       ],
     }),

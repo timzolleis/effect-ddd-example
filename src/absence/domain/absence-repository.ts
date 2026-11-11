@@ -1,26 +1,18 @@
 import { Context, Effect } from "effect"
-import type { MemberWithTag } from "../../lib/match-tag.ts"
 import type { OrganizationId } from "../../shared/ids.ts"
 import type {
-  AbsenceAlreadyActiveError, AbsenceAlreadyArchivedError, AbsenceAlreadyExistsError,
-  AbsenceChangedConcurrentlyError, AbsenceNotFoundError, AbsenceStillDraftError,
+  AbsenceAlreadyActiveError, AbsenceAlreadyArchivedError, AbsenceChangedConcurrentlyError, AbsenceNotFoundError,
+  AbsenceStillDraftError,
 } from "./absence-error.ts"
-import type { AbsenceEvent } from "./absence-event.ts"
 import type { AbsenceId } from "./absence-id.ts"
-import type { ActiveAbsence, DraftAbsence, EditableAbsence } from "./absence.ts"
+import type { Absence, ActiveAbsence, DraftAbsence, EditableAbsence } from "./absence.ts"
 
 export type FindAbsenceByIdInput = { readonly organizationId: OrganizationId; readonly absenceId: AbsenceId }
 
-// The constraint makes it exhaustive: a new event doesn't compile until it names its write error.
-type OneEntryPerAbsenceEventTag<T extends Record<AbsenceEvent["_tag"], unknown>> = T
-export type AbsenceEventWriteErrors = OneEntryPerAbsenceEventTag<{
-  AbsenceDraftedEvent: AbsenceAlreadyExistsError
-  AbsenceRescheduledEvent: AbsenceChangedConcurrentlyError
-  AbsenceReassignedEvent: AbsenceChangedConcurrentlyError
-  AbsenceActivatedEvent: AbsenceChangedConcurrentlyError
-  AbsenceArchivedEvent: AbsenceChangedConcurrentlyError
-  AbsenceDeletedEvent: AbsenceChangedConcurrentlyError
-}>
+// One write per kind of event, with the states it needs: a create has no state before, a delete none after.
+export type InsertAbsenceInput = { readonly after: Absence }
+export type UpdateAbsenceInput = { readonly before: Absence; readonly after: Absence }
+export type DeleteAbsenceInput = { readonly before: Absence }
 
 export class AbsenceRepository extends Context.Service<AbsenceRepository, {
   findDraftAbsenceById(input: FindAbsenceByIdInput):
@@ -29,5 +21,7 @@ export class AbsenceRepository extends Context.Service<AbsenceRepository, {
     Effect.Effect<ActiveAbsence, AbsenceNotFoundError | AbsenceStillDraftError | AbsenceAlreadyArchivedError>
   findEditableAbsenceById(input: FindAbsenceByIdInput):
     Effect.Effect<EditableAbsence, AbsenceNotFoundError | AbsenceAlreadyArchivedError>
-  publishAbsenceEvent<Tag extends AbsenceEvent["_tag"]>(event: MemberWithTag<AbsenceEvent, Tag>): Effect.Effect<void, AbsenceEventWriteErrors[Tag]>
+  insertAbsence(input: InsertAbsenceInput): Effect.Effect<void, AbsenceChangedConcurrentlyError>
+  updateAbsence(input: UpdateAbsenceInput): Effect.Effect<void, AbsenceChangedConcurrentlyError>
+  deleteAbsence(input: DeleteAbsenceInput): Effect.Effect<void, AbsenceChangedConcurrentlyError>
 }>()("AbsenceRepository") {}

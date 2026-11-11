@@ -96,12 +96,12 @@ layer(TestLayer)("absence HTTP", (it) => {
     expect(created.assigneeId).toBe(bob)
   }))
 
-  it.effect("client-sent id: reused → AbsenceAlreadyExistsHttpError", () => Effect.gen(function* () {
+  it.effect("client-sent id: reused → AbsenceChangedConcurrentlyHttpError", () => Effect.gen(function* () {
     const client = yield* setup
     const absenceId = unknownAbsenceId
     yield* client.alice.createAbsence({ params, payload: { absenceId, assigneeId: alice, ...period } })
     expect(yield* errorTag(client.alice.createAbsence({ params, payload: { absenceId, assigneeId: alice, ...period } })))
-      .toBe("AbsenceAlreadyExistsHttpError")
+      .toBe("AbsenceChangedConcurrentlyHttpError")
   }))
 
   it.effect("lists filter by visibility", () => Effect.gen(function* () {

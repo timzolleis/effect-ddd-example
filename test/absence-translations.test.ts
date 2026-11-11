@@ -52,7 +52,6 @@ describe("absenceHttpErrorFromAbsenceError", () => {
     [new AbsenceErrors.AbsenceOngoingError({ absenceId, period }), 409],
     [new AbsenceErrors.InvalidPeriodError(period), 422],
     [new AbsenceErrors.AbsenceChangedConcurrentlyError({ absenceId }), 409],
-    [new AbsenceErrors.AbsenceAlreadyExistsError({ absenceId }), 409],
   ] as const)("%s → %i", (error, status) => {
     const httpError = absenceHttpErrorFromAbsenceError(error)
     expect(httpError._tag).toBe(error._tag.replace(/Error$/, "HttpError"))

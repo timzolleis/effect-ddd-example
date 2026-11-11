@@ -1,24 +1,21 @@
 import { DateTime, Effect, Layer, Match, Predicate, Schema } from "effect"
-import type { Prisma } from "~prisma/client"
+import { AbsenceStatus, type Prisma } from "~prisma/client"
 import { PrismaService } from "~prisma/effect"
 import { dateTimeUtcFromDate } from "../../lib/date-time-utc-from-date.ts"
-import { matchTag, type MemberWithTag } from "../../lib/match-tag.ts"
 import { withOptionalTag } from "../../lib/with-optional-tag.ts"
-import { DomainEvents } from "../../shared/domain-events.ts"
-import { ActiveAbsence, DraftAbsence } from "../domain/absence.ts"
+import { ActiveAbsence, DraftAbsence, type Absence } from "../domain/absence.ts"
 import {
-  AbsenceAlreadyActiveError, AbsenceAlreadyArchivedError, AbsenceAlreadyExistsError,
-  AbsenceChangedConcurrentlyError, AbsenceNotFoundError, AbsenceStillDraftError,
+  AbsenceAlreadyActiveError, AbsenceAlreadyArchivedError, AbsenceChangedConcurrentlyError, AbsenceNotFoundError,
+  AbsenceStillDraftError,
 } from "../domain/absence-error.ts"
-import type { AbsenceEvent } from "../domain/absence-event.ts"
 import {
-  AbsenceRepository, type AbsenceEventWriteErrors, type FindAbsenceByIdInput,
+  AbsenceRepository, type DeleteAbsenceInput, type FindAbsenceByIdInput, type InsertAbsenceInput, type UpdateAbsenceInput,
 } from "../domain/absence-repository.ts"
 
 // No archivedAt: no find returns an archived absence.
 const absenceSelect = {
   id: true, organizationId: true, creatorId: true, assigneeId: true,
-  from: true, to: true, status: true, createdAt: true, activatedAt: true,
+  from: true, to: true, status: true, createdAt: true, updatedAt: true, activatedAt: true,
 } satisfies Prisma.AbsenceSelect
 
 type AbsenceRow = Prisma.AbsenceGetPayload<{ select: typeof absenceSelect }>
@@ -37,6 +34,7 @@ const absenceFieldsFromRow = (row: AbsenceRow) => ({
   assigneeId: row.assigneeId,
   period: { from: dateTimeUtcFromDate(row.from), to: dateTimeUtcFromDate(row.to) },
   createdAt: dateTimeUtcFromDate(row.createdAt),
+  updatedAt: dateTimeUtcFromDate(row.updatedAt),
 })
 
 // A row that doesn't decode is corrupt: die.
@@ -49,9 +47,30 @@ const decodeActiveAbsence = (row: AbsenceRow) =>
     activatedAt: dateTimeUtcFromDate(row.activatedAt),
   }).pipe(Effect.orDie)
 
+const absenceColumnsFromFields = (absence: Absence) => ({
+  id: absence.absenceId,
+  organizationId: absence.organizationId,
+  creatorId: absence.creatorId,
+  assigneeId: absence.assigneeId,
+  from: DateTime.toDateUtc(absence.period.from),
+  to: DateTime.toDateUtc(absence.period.to),
+  createdAt: DateTime.toDateUtc(absence.createdAt),
+  updatedAt: DateTime.toDateUtc(absence.updatedAt),
+})
+
+const absenceRowFromState = (absence: Absence): Prisma.AbsenceUncheckedCreateInput =>
+  Match.valueTags(absence, {
+    DraftAbsence: (absence) => ({ ...absenceColumnsFromFields(absence), status: AbsenceStatus.draft, activatedAt: null, archivedAt: null }),
+    ActiveAbsence: (absence) => ({ ...absenceColumnsFromFields(absence), status: AbsenceStatus.active, activatedAt: DateTime.toDateUtc(absence.activatedAt), archivedAt: null }),
+    ArchivedAbsence: (absence) => ({ ...absenceColumnsFromFields(absence), status: AbsenceStatus.archived, activatedAt: DateTime.toDateUtc(absence.activatedAt), archivedAt: DateTime.toDateUtc(absence.archivedAt) }),
+  })
+
+// the row the write must still find: before's identity and updatedAt
+const absenceGuard = (before: Absence) =>
+  ({ id: before.absenceId, organizationId: before.organizationId, updatedAt: DateTime.toDateUtc(before.updatedAt) })
+
 export const PrismaAbsenceRepository = Layer.effect(AbsenceRepository, Effect.gen(function* () {
   const prisma = yield* PrismaService
-  const domainEvents = yield* DomainEvents
 
   // No row in the organization is the expected failure; any other Prisma error dies. An unknown status makes Match.exhaustive throw: a defect.
   const findDraftAbsenceById = Effect.fn("PrismaAbsenceRepository.findDraftAbsenceById")(
@@ -108,102 +127,39 @@ export const PrismaAbsenceRepository = Layer.effect(AbsenceRepository, Effect.ge
     },
   )
 
-  // Out is the port's error map, given explicitly: inferred from the writes, it wouldn't match AbsenceEventWriteErrors[Tag] for a generic Tag.
-  // A guarded write that matches no row means the absence changed or vanished since the find. Any other Prisma error dies.
-  const writeAbsenceEvent = matchTag<AbsenceEvent>()<{
-    readonly [Tag in AbsenceEvent["_tag"]]: Effect.Effect<void, AbsenceEventWriteErrors[Tag]>
-  }>({
-    AbsenceDraftedEvent: (event) =>
-      prisma.absence.create({
-        data: {
-          id: event.absenceId,
-          organizationId: event.organizationId,
-          creatorId: event.creatorId,
-          assigneeId: event.assigneeId,
-          from: DateTime.toDateUtc(event.period.from),
-          to: DateTime.toDateUtc(event.period.to),
-          status: "draft",
-          createdAt: DateTime.toDateUtc(event.occurredOn),
-        },
-        select: { id: true },
-      }).pipe(
+  const insertAbsence = Effect.fn("PrismaAbsenceRepository.insertAbsence")(
+    function* ({ after }: InsertAbsenceInput) {
+      yield* prisma.absence.create({ data: absenceRowFromState(after), select: { id: true } }).pipe(
         Effect.catchTag(
           "PrismaUniqueConstraintError",
-          () => new AbsenceAlreadyExistsError({ absenceId: event.absenceId }),
+          () => new AbsenceChangedConcurrentlyError({ absenceId: after.absenceId }),
           (error) => Effect.die(error),
         ),
-        Effect.asVoid,
-      ),
-    AbsenceRescheduledEvent: (event) =>
-      prisma.absence.update({
-        where: { id: event.absenceId, organizationId: event.organizationId, status: { in: ["draft", "active"] } },
-        data: { from: DateTime.toDateUtc(event.period.from), to: DateTime.toDateUtc(event.period.to) },
-        select: { id: true },
-      }).pipe(
-        Effect.catchTag(
-          "PrismaRecordNotFoundError",
-          () => new AbsenceChangedConcurrentlyError({ absenceId: event.absenceId }),
-          (error) => Effect.die(error),
-        ),
-        Effect.asVoid,
-      ),
-    AbsenceReassignedEvent: (event) =>
-      prisma.absence.update({
-        where: { id: event.absenceId, organizationId: event.organizationId, status: { in: ["draft", "active"] } },
-        data: { assigneeId: event.assigneeId },
-        select: { id: true },
-      }).pipe(
-        Effect.catchTag(
-          "PrismaRecordNotFoundError",
-          () => new AbsenceChangedConcurrentlyError({ absenceId: event.absenceId }),
-          (error) => Effect.die(error),
-        ),
-        Effect.asVoid,
-      ),
-    AbsenceActivatedEvent: (event) =>
-      prisma.absence.update({
-        where: { id: event.absenceId, organizationId: event.organizationId, status: "draft" },
-        data: { status: "active", activatedAt: DateTime.toDateUtc(event.occurredOn) },
-        select: { id: true },
-      }).pipe(
-        Effect.catchTag(
-          "PrismaRecordNotFoundError",
-          () => new AbsenceChangedConcurrentlyError({ absenceId: event.absenceId }),
-          (error) => Effect.die(error),
-        ),
-        Effect.asVoid,
-      ),
-    AbsenceArchivedEvent: (event) =>
-      prisma.absence.update({
-        where: { id: event.absenceId, organizationId: event.organizationId, status: "active" },
-        data: { status: "archived", archivedAt: DateTime.toDateUtc(event.occurredOn) },
-        select: { id: true },
-      }).pipe(
-        Effect.catchTag(
-          "PrismaRecordNotFoundError",
-          () => new AbsenceChangedConcurrentlyError({ absenceId: event.absenceId }),
-          (error) => Effect.die(error),
-        ),
-        Effect.asVoid,
-      ),
-    AbsenceDeletedEvent: (event) =>
-      prisma.absence.delete({
-        where: { id: event.absenceId, organizationId: event.organizationId, status: { in: ["draft", "active"] } },
-        select: { id: true },
-      }).pipe(
-        Effect.catchTag(
-          "PrismaRecordNotFoundError",
-          () => new AbsenceChangedConcurrentlyError({ absenceId: event.absenceId }),
-          (error) => Effect.die(error),
-        ),
-        Effect.asVoid,
-      ),
-  })
+      )
+    },
+  )
 
-  const publishAbsenceEvent = Effect.fn("PrismaAbsenceRepository.publishAbsenceEvent")(
-    function* <Tag extends AbsenceEvent["_tag"]>(event: MemberWithTag<AbsenceEvent, Tag>) {
-      yield* writeAbsenceEvent(event)
-      yield* domainEvents.publishDomainEvent(event)   // not atomic with the write
+  const updateAbsence = Effect.fn("PrismaAbsenceRepository.updateAbsence")(
+    function* ({ before, after }: UpdateAbsenceInput) {
+      yield* prisma.absence.update({ where: absenceGuard(before), data: absenceRowFromState(after), select: { id: true } }).pipe(
+        Effect.catchTag(
+          "PrismaRecordNotFoundError",
+          () => new AbsenceChangedConcurrentlyError({ absenceId: before.absenceId }),
+          (error) => Effect.die(error),
+        ),
+      )
+    },
+  )
+
+  const deleteAbsence = Effect.fn("PrismaAbsenceRepository.deleteAbsence")(
+    function* ({ before }: DeleteAbsenceInput) {
+      yield* prisma.absence.delete({ where: absenceGuard(before), select: { id: true } }).pipe(
+        Effect.catchTag(
+          "PrismaRecordNotFoundError",
+          () => new AbsenceChangedConcurrentlyError({ absenceId: before.absenceId }),
+          (error) => Effect.die(error),
+        ),
+      )
     },
   )
 
@@ -211,6 +167,8 @@ export const PrismaAbsenceRepository = Layer.effect(AbsenceRepository, Effect.ge
     findDraftAbsenceById,
     findActiveAbsenceById,
     findEditableAbsenceById,
-    publishAbsenceEvent,
+    insertAbsence,
+    updateAbsence,
+    deleteAbsence,
   })
 }))

@@ -54,10 +54,6 @@ export class AbsenceChangedConcurrentlyHttpError extends Schema.TaggedError<Abse
   message: Schema.String.pipe(Schema.withConstructorDefault(Effect.succeed("Someone else changed this absence. Reload and try again."))),
 }, { httpApiStatus: 409 }) {}
 
-export class AbsenceAlreadyExistsHttpError extends Schema.TaggedError<AbsenceAlreadyExistsHttpError>()("AbsenceAlreadyExistsHttpError", {
-  message: Schema.String.pipe(Schema.withConstructorDefault(Effect.succeed("An absence with this id already exists."))),
-}, { httpApiStatus: 409 }) {}
-
 export const absenceHttpErrorFromAbsenceError = matchTag<AbsenceError>()({
   AbsenceNotFoundError: () => new AbsenceNotFoundHttpError(),
   AbsenceStillDraftError: () => new AbsenceStillDraftHttpError(),
@@ -72,5 +68,4 @@ export const absenceHttpErrorFromAbsenceError = matchTag<AbsenceError>()({
   AbsenceOngoingError: () => new AbsenceOngoingHttpError(),
   InvalidPeriodError: () => new InvalidPeriodHttpError(),
   AbsenceChangedConcurrentlyError: () => new AbsenceChangedConcurrentlyHttpError(),
-  AbsenceAlreadyExistsError: () => new AbsenceAlreadyExistsHttpError(),
 })

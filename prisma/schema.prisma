@@ -28,6 +28,7 @@ model Absence {
   to             DateTime
   status         AbsenceStatus
   createdAt      DateTime // AbsenceDraftedEvent.occurredOn; no @default
+  updatedAt      DateTime // the last event's occurredOn; the write guard. No @updatedAt
   activatedAt    DateTime?
   archivedAt     DateTime?
 
