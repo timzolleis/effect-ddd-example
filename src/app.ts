@@ -10,7 +10,7 @@ import { PrismaAbsenceRepository } from "./absence/infrastructure/prisma-absence
 import { PrismaAbsenceViews } from "./absence/infrastructure/prisma-absence-views.ts"
 import { OrganizationMemberMiddleware } from "./lib/organization-member-middleware.ts"
 
-// Requires from the host: PrismaService, DomainEvents, OrganizationMembers, UserRelationships, AuthMiddleware.
+// Requires from the host: PrismaService, DomainEvents, DomainEventOutbox, Transactions, OrganizationMembers, UserRelationships, AuthMiddleware.
 export const AbsenceHttpLayer = AbsenceController.pipe(
   Layer.provide([
     CreateAbsenceService.layer, RescheduleAbsenceService.layer, ReassignAbsenceService.layer,

@@ -35,3 +35,11 @@ model Absence {
   @@index([organizationId, assigneeId])
   @@index([organizationId, creatorId])
 }
+
+// Written by DomainEventOutbox in the transaction of the write; the host's relay delivers and deletes the rows.
+model OutboxEvent {
+  id         Int      @id @default(autoincrement()) // delivery order
+  eventTag   String
+  payload    String   // JSON text, encoded through DomainEvent
+  occurredOn DateTime
+}
