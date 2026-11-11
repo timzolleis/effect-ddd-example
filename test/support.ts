@@ -12,6 +12,7 @@ import {
   evolveAbsence, initialAbsence, type Absence, type ActiveAbsence, type ArchivedAbsence, type DraftAbsence,
 } from "../src/absence/domain/absence.ts"
 import { AuthMiddleware, NotAuthenticatedHttpError } from "../src/lib/auth-middleware.ts"
+import { PrismaDomainEventOutbox, PrismaTransactions } from "../src/lib/prisma-transactions.ts"
 import { CurrentUser } from "../src/shared/current-user.ts"
 import { DomainEvents, type DomainEvent } from "../src/shared/domain-events.ts"
 import { OrganizationId, UserId } from "../src/shared/ids.ts"
@@ -117,4 +118,8 @@ export const AuthMiddlewareLayer = Layer.succeed(AuthMiddleware, AuthMiddleware.
 export const databaseUrl = process.env.DATABASE_URL ?? "postgresql://absence:absence@localhost:55432/absence"
 export const prismaClient = new PrismaClient({ adapter: new PrismaPg({ connectionString: databaseUrl }) })
 export const PrismaLayer = PrismaService.layer.pipe(Layer.provide(layerFromPrismaClient(prismaClient)))
-export const resetDatabase = () => prismaClient.absence.deleteMany()
+// the host's real transactions and outbox, on the test database
+export const PrismaHostLayer = Layer.mergeAll(PrismaTransactions, PrismaDomainEventOutbox).pipe(Layer.provideMerge(PrismaLayer))
+export const resetDatabase = () => prismaClient.$transaction([prismaClient.absence.deleteMany(), prismaClient.outboxEvent.deleteMany()])
+export const listOutboxEventTags = () =>
+  Effect.promise(() => prismaClient.outboxEvent.findMany({ orderBy: { id: "asc" } })).pipe(Effect.map((rows) => rows.map((row) => row.eventTag)))

@@ -8,14 +8,14 @@ import { AbsenceHttpLayer } from "../src/app.ts"
 import { AuthMiddleware } from "../src/lib/auth-middleware.ts"
 import type { UserId } from "../src/shared/ids.ts"
 import {
-  alice, at, AuthMiddlewareLayer, bob, child, host, HostLayer, manager, organizationId, outsider, PrismaLayer, resetDatabase,
+  alice, at, AuthMiddlewareLayer, bob, child, host, HostLayer, listOutboxEventTags, manager, organizationId, outsider, PrismaHostLayer, resetDatabase,
   resetHost, unknownAbsenceId,
 } from "./support.ts"
 
 const TestLayer = Layer.mergeAll(
   AbsenceHttpLayer.pipe(Layer.provideMerge(AuthMiddlewareLayer)),
   HttpServer.layerServices,
-).pipe(Layer.provide([PrismaLayer, HostLayer]))
+).pipe(Layer.provide([PrismaHostLayer, HostLayer]))
 
 // one typed client per user; the bearer token is the userId
 const makeClientFor = (userId: UserId) => HttpApiTest.groups(Api, ["absences"]).pipe(Effect.provide(
@@ -65,6 +65,8 @@ layer(TestLayer)("absence HTTP", (it) => {
 
     yield* TestClock.setTime(DateTime.toEpochMillis(at("2026-03-04T00:00:00Z")))
     expect((yield* client.alice.archiveAbsence({ params: absenceParams })).status).toBe("archived")
+    expect(yield* listOutboxEventTags()).toEqual(["AbsenceArchivedEvent"])   // through the outbox, not DomainEvents
+    expect(host.publishedEvents).toHaveLength(3)
     expect(yield* errorTag(client.alice.deleteAbsence({ params: absenceParams }))).toBe("AbsenceAlreadyArchivedHttpError")
   }))
 

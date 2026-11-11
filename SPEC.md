@@ -35,6 +35,7 @@ Conventions:
 | Time | `DateTime.Utc` everywhere except Prisma rows; `now` from `DateTime.now` in the use case (`TestClock` in tests); `Utc`, not `Zoned`, until a rule depends on local calendar days | ours |
 | Repository | Narrowing finds + three writes (`insertAbsence`, `updateAbsence`, `deleteAbsence`) that store the state `evolveAbsence` produced, guarded by `before.updatedAt`. The repository never sees an event | Dudycz (decide / evolve), Spring Data (store the aggregate) |
 | Event publishing order | The use case publishes after the write: find → decide → evolve → save → publish. Not atomic | ours |
+| Atomic events | Opt-in per use case; here only archive. Write + `DomainEventOutbox.addDomainEvent` inside `Transactions.runInTransaction`; the outbox write requires `Transaction`, so it can't run outside one | ours |
 | Identity | Hybrid: the client may send an `AbsenceId` (prefixed cuid2, format owned by the domain); otherwise the create use case calls `generateAbsenceId()`. A taken id is a create that lost a race → `AbsenceChangedConcurrentlyError` | ours |
 | Tenancy | Every command, read, and write scoped by `OrganizationId`. The assignee must be a member of the organization: checked on create and reassign | Vernon (`TenantId`) |
 | Events | Past tense + `Event` suffix; carry `occurredOn` | Vernon (past tense), ours (suffix) |
@@ -111,11 +112,13 @@ src/
 │  ├─ match-tag.ts                      matchTag, MemberWithTag: tag dispatch whose result follows the tag
 │  ├─ date-time-utc-from-date.ts        Date → DateTime.Utc, null stays null
 │  ├─ auth-middleware.ts                stand-in for the host's auth: provides CurrentUser
+│  ├─ prisma-transactions.ts            stand-in for the host's PrismaTransactions, PrismaDomainEventOutbox
 │  └─ organization-member-middleware.ts :organizationId → membership check → CurrentActor
 ├─ shared/                              ports and types owned elsewhere
 │  ├─ ids.ts                            OrganizationId, UserId
 │  ├─ current-user.ts                   CurrentUser, CurrentActor, Permissions
-│  ├─ domain-events.ts                  DomainEvents.publishDomainEvent
+│  ├─ domain-events.ts                  DomainEvents.publishDomainEvent, DomainEventOutbox.addDomainEvent
+│  ├─ transaction.ts                    Transaction, Transactions.runInTransaction
 │  ├─ organization-members.ts           OrganizationMembers.isOrganizationMember
 │  └─ user-relationships.ts             UserRelationships.listRelatedUserIds
 └─ absence/
@@ -603,7 +606,27 @@ Three writes, ever: a new event or transition adds nothing here. Each fails only
 export class DomainEvents extends Context.Service<DomainEvents, {
   publishDomainEvent(event: DomainEvent): Effect.Effect<void>
 }>()("DomainEvents") {}
+
+// Opt-in, for an event that must never be lost: the event becomes an outbox row in the write's transaction.
+// The host's relay delivers the rows.
+export class DomainEventOutbox extends Context.Service<DomainEventOutbox, {
+  addDomainEvent(event: DomainEvent): Effect.Effect<void, never, Transaction>
+}>()("DomainEventOutbox") {}
 ```
+
+```ts
+// shared/transaction.ts
+// Proof that an effect runs inside a database transaction. Only runInTransaction provides it.
+export class Transaction extends Context.Service<Transaction, {}>()("Transaction") {}
+
+// Owned by the host: it opens the transaction its adapters share.
+export class Transactions extends Context.Service<Transactions, {
+  // Commits when the effect succeeds, rolls back when it fails.
+  runInTransaction<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, Exclude<R, Transaction>>
+}>()("Transactions") {}
+```
+
+- `Transaction` is on the outbox only. The repository writes don't require it: they join a transaction when one is open, so the five use cases that don't opt in stay as they are.
 
 ```ts
 // shared/organization-members.ts
@@ -729,23 +752,23 @@ A plain readonly type per use case. Use a `Schema.Struct` only when a command cr
 Every command use case is the same five steps: find the narrowed absence, call its transition, `evolve` the event onto it, save, publish the event. The write follows the event's kind: a create calls `insertAbsence({ after: initialAbsence(event) })`, a change `updateAbsence({ before, after: evolveAbsence(…) })`, a delete `deleteAbsence({ before })`. Publish comes after the write, so a failed write publishes nothing.
 
 ```ts
-// absence/application/archive-absence-service.ts
-export type ArchiveAbsenceCommand = { readonly organizationId: OrganizationId; readonly actor: AbsenceActor; readonly absenceId: AbsenceId }
+// absence/application/activate-absence-service.ts
+export type ActivateAbsenceCommand = { readonly organizationId: OrganizationId; readonly actor: AbsenceActor; readonly absenceId: AbsenceId }
 
-export class ArchiveAbsenceService extends Context.Service<ArchiveAbsenceService, {
-  archiveAbsence(command: ArchiveAbsenceCommand): Effect.Effect<void,
-    | AbsenceNotFoundError | AbsenceStillDraftError | AbsenceAlreadyArchivedError
-    | NotAllowedToEditAbsenceError | AbsenceOngoingError
+export class ActivateAbsenceService extends Context.Service<ActivateAbsenceService, {
+  activateAbsence(command: ActivateAbsenceCommand): Effect.Effect<void,
+    | AbsenceNotFoundError | AbsenceAlreadyActiveError | AbsenceAlreadyArchivedError
+    | NotAbsenceCreatorError
     | AbsenceChangedConcurrentlyError>
-}>()("ArchiveAbsenceService") {
-  static layer = Layer.effect(ArchiveAbsenceService, Effect.gen(function* () {
+}>()("ActivateAbsenceService") {
+  static layer = Layer.effect(ActivateAbsenceService, Effect.gen(function* () {
     const absenceRepository = yield* AbsenceRepository
     const domainEvents = yield* DomainEvents
-    return ArchiveAbsenceService.of({
-      archiveAbsence: Effect.fn("ArchiveAbsenceService.archiveAbsence")(function* ({ organizationId, actor, absenceId }) {
+    return ActivateAbsenceService.of({
+      activateAbsence: Effect.fn("ActivateAbsenceService.activateAbsence")(function* ({ organizationId, actor, absenceId }) {
         const now = yield* DateTime.now
-        const absence = yield* absenceRepository.findActiveAbsenceById({ organizationId, absenceId })
-        const event = yield* Effect.fromResult(archiveAbsence({ absence, actor, now }))
+        const absence = yield* absenceRepository.findDraftAbsenceById({ organizationId, absenceId })
+        const event = yield* Effect.fromResult(activateAbsence({ absence, actor, now }))
         yield* absenceRepository.updateAbsence({ before: absence, after: evolveAbsence({ absence, event }) })
         yield* domainEvents.publishDomainEvent(event)
       }),
@@ -755,8 +778,25 @@ export class ArchiveAbsenceService extends Context.Service<ArchiveAbsenceService
 ```
 
 - The error union lists the find's errors, then the transition's, then the write's. The compiler checks it against the body.
-- The method key `archiveAbsence` doesn't shadow the imported domain function. Grep `ArchiveAbsenceService` for the use case, `archiveAbsence(` for both.
-- `Effect.fn("ArchiveAbsenceService.archiveAbsence")` is the span: it records the domain error with its context before the controller maps it.
+- The method key `activateAbsence` doesn't shadow the imported domain function. Grep `ActivateAbsenceService` for the use case, `activateAbsence(` for both.
+- `Effect.fn("ActivateAbsenceService.activateAbsence")` is the span: it records the domain error with its context before the controller maps it.
+
+Archive opts in to atomic events: the save and the publish run in one transaction, and the publish is an outbox row.
+
+```ts
+// absence/application/archive-absence-service.ts
+    const domainEventOutbox = yield* DomainEventOutbox
+    const transactions = yield* Transactions
+…
+        // atomic: the archive and its event commit together, or neither does
+        yield* absenceRepository.updateAbsence({ before: absence, after: evolveAbsence({ absence, event }) }).pipe(
+          Effect.andThen(domainEventOutbox.addDomainEvent(event)),
+          transactions.runInTransaction,
+        )
+```
+
+- Without `runInTransaction` the body requires `Transaction`, and the service doesn't compile.
+- The error union is unchanged: a domain error inside the transaction rolls it back and comes out typed.
 
 Create and reassign also load a fact about the new assignee:
 
@@ -841,9 +881,10 @@ ArchiveAbsenceService.archiveAbsence({ organizationId, actor, absenceId })
 ├─ archiveAbsence({ absence, actor, now })
 │    : Result<AbsenceArchivedEvent, NotAllowedToEditAbsenceError | AbsenceOngoingError>
 ├─ evolveAbsence({ absence, event }): Absence
-├─ AbsenceRepository.updateAbsence({ before, after })
-│    : Effect<void, AbsenceChangedConcurrentlyError>
-└─ DomainEvents.publishDomainEvent(event): Effect<void>
+└─ Transactions.runInTransaction(…)            one commit
+   ├─ AbsenceRepository.updateAbsence({ before, after })
+   │    : Effect<void, AbsenceChangedConcurrentlyError>
+   └─ DomainEventOutbox.addDomainEvent(event): Effect<void, never, Transaction>
 
 DeleteAbsenceService.deleteAbsence({ organizationId, actor, absenceId })
 ├─ AbsenceRepository.findEditableAbsenceById({ organizationId, absenceId })
@@ -1044,6 +1085,41 @@ const absenceGuard = (before: Absence) =>
 - Writes `select: { id: true }`: nothing is read back; the caller has `after`, the controller reads the view.
 - Every `DateTime.Utc` is converted with `DateTime.toDateUtc`.
 - Cost: `updatedAt` has millisecond precision, so two writes of one row within the same millisecond could pass each other's guard.
+
+### Transactions and outbox (`lib/prisma-transactions.ts`)
+
+```prisma
+// prisma/schema.prisma
+// Written by DomainEventOutbox in the transaction of the write; the host's relay delivers and deletes the rows.
+model OutboxEvent {
+  id         Int      @id @default(autoincrement()) // delivery order
+  eventTag   String
+  payload    String   // JSON text, encoded through DomainEvent
+  occurredOn DateTime
+}
+```
+
+```ts
+// lib/prisma-transactions.ts
+// Every PrismaService call inside the effect joins the transaction: the generated client reads it from the context.
+// Sandboxed: the generated $transaction rethrows Cause.squash, which turns a defect into a typed failure. The whole
+// cause passes through instead; anything else it throws (the commit failed) dies.
+export const PrismaTransactions = Layer.effect(Transactions, Effect.gen(function* () {
+  const prisma = yield* PrismaService
+  return Transactions.of({
+    runInTransaction: (effect) =>
+      prisma.$transaction(effect.pipe(Effect.provideService(Transaction, Transaction.of({})), Effect.sandbox)).pipe(
+        Effect.catch((cause) => Cause.isCause(cause) ? Effect.failCause(cause) : Effect.die(cause)),
+      ),
+  })
+}))
+…
+      yield* Transaction // outside a transaction the row could commit without the write: doesn't compile
+```
+
+- `Transaction` carries nothing: `effect-prisma-generator` already passes the transaction client through the context (`PrismaTransactionClientService`), so `PrismaAbsenceRepository` is unchanged.
+- `payload` is `String`, not `Json`: Prisma's `Json` input type excludes a top-level `null`, and the encoded event's type includes it.
+- The host owns both adapters, as it owns `DomainEvents`; they sit in `lib/` beside the auth middleware.
 
 `matchTag` is the one helper for tag dispatch whose result type follows the tag:
 
@@ -1334,7 +1410,7 @@ A create retried with the same client-sent `absenceId` does the same with `Absen
 
 ```ts
 // app.ts
-// Requires from the host: PrismaService, DomainEvents, OrganizationMembers, UserRelationships, AuthMiddleware.
+// Requires from the host: PrismaService, DomainEvents, DomainEventOutbox, Transactions, OrganizationMembers, UserRelationships, AuthMiddleware.
 export const AbsenceHttpLayer = AbsenceController.pipe(
   Layer.provide([
     CreateAbsenceService.layer, RescheduleAbsenceService.layer, ReassignAbsenceService.layer,
@@ -1361,6 +1437,7 @@ Tests (`test/`), at the lowest place that owns each rule. Fixtures (`test/suppor
 | `matchTag` dispatch; result typed by tag; missing or unknown tag rejected (`@ts-expect-error`) | `match-tag.test.ts` |
 | Finds let through only their states; foreign organization; corrupt row dies | `prisma-absence-repository.test.ts`, real Postgres |
 | Writes: a taken id, a stale update, a stale delete → `AbsenceChangedConcurrentlyError` | `prisma-absence-repository.test.ts`, real Postgres |
+| Atomic archive: both rows commit; a failed outbox write rolls the archive back and stays a defect; a domain error stays typed; an outbox write outside a transaction doesn't compile (`@ts-expect-error`) | `archive-absence-service.test.ts`, real Postgres |
 | Visibility `where` per reader: own / others' draft / assigned / related / unrelated / other organization | `prisma-absence-views.test.ts`, real Postgres |
 | The whole path: middleware, permissions, read-back, 201, error mapping, `TestClock` | `absence-http.test.ts`, `HttpApiTest` against the real handlers and Postgres |
 
@@ -1370,7 +1447,7 @@ No separate tests for transitions whose policies are tested, use cases that only
 
 ## 13. Open
 
-1. Write + publish are not atomic: the use case publishes after the write, so a crash in between loses the event. An outbox row in the write's transaction closes it.
+1. Write + publish are not atomic, except in archive: the other use cases publish after the write, so a crash in between loses the event. Each opts in as archive does once its events must not be lost.
 2. Edit window for permitted users: it counts from creation, so they can only reschedule or reassign others' absences within that first hour. Archive and delete aren't windowed.
 3. Commands vs visibility: a command on an absence the actor can't see answers 409 or 403, while a read answers 404. It reveals that an absence with a known id exists, and its state. To hide it, the finds would take the actor's visibility (not visible → `AbsenceNotFoundError`) before the state check.
 4. System intents (a nightly job archiving ended absences): an actor-less transition with its own policy list, or an actor variant every policy handles. Decide with the first real case.
