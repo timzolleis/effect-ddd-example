@@ -3,20 +3,20 @@ import { DomainEvents } from "../../shared/domain-events.ts"
 import type { OrganizationId, UserId } from "../../shared/ids.ts"
 import { OrganizationMembers } from "../../shared/organization-members.ts"
 import type { AbsenceActor } from "../domain/absence-actor.ts"
+import { Absence, ReassignAbsenceCommand } from "../domain/absence-aggregate.ts"
 import type {
   AbsenceAlreadyArchivedError, AbsenceChangedConcurrentlyError, AbsenceEditWindowClosedError, AbsenceNotFoundError,
   AssigneeNotInOrganizationError, NotAllowedToAssignAbsenceError, NotAllowedToEditAbsenceError,
 } from "../domain/absence-error.ts"
 import type { AbsenceId } from "../domain/absence-id.ts"
 import { AbsenceRepository } from "../domain/absence-repository.ts"
-import { evolveAbsence, reassignAbsence } from "../domain/absence.ts"
 
-export type ReassignAbsenceCommand = {
+export type ReassignAbsenceRequest = {
   readonly organizationId: OrganizationId; readonly actor: AbsenceActor; readonly absenceId: AbsenceId; readonly assigneeId: UserId
 }
 
 export class ReassignAbsenceService extends Context.Service<ReassignAbsenceService, {
-  reassignAbsence(command: ReassignAbsenceCommand): Effect.Effect<void,
+  reassignAbsence(request: ReassignAbsenceRequest): Effect.Effect<void,
     | AbsenceNotFoundError | AbsenceAlreadyArchivedError
     | NotAllowedToEditAbsenceError | AssigneeNotInOrganizationError
     | NotAllowedToAssignAbsenceError | AbsenceEditWindowClosedError
@@ -32,8 +32,9 @@ export class ReassignAbsenceService extends Context.Service<ReassignAbsenceServi
         const absence = yield* absenceRepository.findEditableAbsenceById({ organizationId, absenceId })
         // after the find, so a missing absence is 404 before anything about the assignee
         const assigneeIsOrganizationMember = yield* organizationMembers.isOrganizationMember({ organizationId, userId: assigneeId })
-        const event = yield* Effect.fromResult(reassignAbsence({ absence, actor, assigneeId, assigneeIsOrganizationMember, now }))
-        yield* absenceRepository.updateAbsence({ before: absence, after: evolveAbsence({ absence, event }) })
+        const command = ReassignAbsenceCommand.make({ actor, assigneeId, assigneeIsOrganizationMember })
+        const event = yield* Effect.fromResult(Absence.decide({ absence, command, now }))
+        yield* absenceRepository.updateAbsence({ before: absence, after: Absence.evolve({ absence, event }) })
         yield* domainEvents.publishDomainEvent(event)
       }),
     })

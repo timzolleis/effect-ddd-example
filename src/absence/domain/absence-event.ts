@@ -27,19 +27,5 @@ export type AbsenceActivatedEvent = typeof AbsenceActivatedEvent.Type
 export const AbsenceArchivedEvent = Schema.TaggedStruct("AbsenceArchivedEvent", { ...absenceEventFields })
 export type AbsenceArchivedEvent = typeof AbsenceArchivedEvent.Type
 
-// assigneeId and period: subscribers can still act on a gone absence
-export const AbsenceDeletedEvent = Schema.TaggedStruct("AbsenceDeletedEvent", {
-  ...absenceEventFields, assigneeId: UserId, period: Period,
-})
-export type AbsenceDeletedEvent = typeof AbsenceDeletedEvent.Type
-
-export const AbsenceEvent = Schema.Union([
-  AbsenceDraftedEvent, AbsenceRescheduledEvent, AbsenceReassignedEvent,
-  AbsenceActivatedEvent, AbsenceArchivedEvent, AbsenceDeletedEvent,
-])
-export type AbsenceEvent = typeof AbsenceEvent.Type
-
-// Exclude puts a new event under change until this file names it a creation or a deletion.
-export type AbsenceCreationEvent = AbsenceDraftedEvent
-export type AbsenceDeletionEvent = AbsenceDeletedEvent
-export type AbsenceChangeEvent = Exclude<AbsenceEvent, AbsenceCreationEvent | AbsenceDeletionEvent>
+export const AbsenceWithdrawnEvent = Schema.TaggedStruct("AbsenceWithdrawnEvent", { ...absenceEventFields })
+export type AbsenceWithdrawnEvent = typeof AbsenceWithdrawnEvent.Type

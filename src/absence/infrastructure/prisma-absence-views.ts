@@ -29,7 +29,7 @@ const decodeAbsenceView = (row: AbsenceViewRow) =>
 
 // Only translates the visibility; absenceVisibilityFromReader and system callers choose it.
 const nonDraftOrCreatedByWhere = (userId: UserId): Prisma.AbsenceWhereInput =>
-  ({ OR: [{ status: { not: "draft" } }, { creatorId: userId }] })
+  ({ OR: [{ status: { notIn: ["draft", "discarded"] } }, { creatorId: userId }] })
 
 const absenceWhereFromFilters = ({ assigneeId, creatorId }: AbsenceListFilters): Prisma.AbsenceWhereInput => ({
   AND: [

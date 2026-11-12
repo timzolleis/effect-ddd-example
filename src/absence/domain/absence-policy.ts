@@ -6,8 +6,8 @@ import {
   NotAllowedToAssignAbsenceError, NotAllowedToDeleteAbsenceError, NotAllowedToEditAbsenceError,
 } from "./absence-error.ts"
 import type {
-  Absence, ActivateAbsenceInput, ArchiveAbsenceInput, CreateAbsenceInput, DeleteAbsenceInput, DraftAbsence,
-  EditableAbsence, ReassignAbsenceInput, RescheduleAbsenceInput,
+  Absence, ActivateAbsenceInput, ArchiveAbsenceInput, CreateAbsenceInput, DraftAbsence,
+  EditableAbsence, ReassignAbsenceInput, RescheduleAbsenceInput, WithdrawAbsenceInput,
 } from "./absence.ts"
 import { isPeriodOngoingAt } from "./period.ts"
 
@@ -115,5 +115,5 @@ export const archiveAbsencePolicies: ReadonlyArray<ArchiveAbsencePolicy> = [
   cannotArchiveWhileOngoingPolicy,
 ]
 
-export type DeleteAbsencePolicy = (input: DeleteAbsenceInput) => Result.Result<void, NotAllowedToDeleteAbsenceError>
-export const deleteAbsencePolicies: ReadonlyArray<DeleteAbsencePolicy> = [onlyCreatorOrPermittedCanDeletePolicy]
+export type WithdrawAbsencePolicy = (input: WithdrawAbsenceInput) => Result.Result<void, NotAllowedToDeleteAbsenceError>
+export const withdrawAbsencePolicies: ReadonlyArray<WithdrawAbsencePolicy> = [onlyCreatorOrPermittedCanDeletePolicy]

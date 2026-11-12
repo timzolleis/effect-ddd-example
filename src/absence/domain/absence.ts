@@ -1,4 +1,4 @@
-import { DateTime, Match, Result, Schema } from "effect"
+import { DateTime, Result, Schema } from "effect"
 import { OrganizationId, UserId } from "../../shared/ids.ts"
 import type { AbsenceActor } from "./absence-actor.ts"
 import type {
@@ -6,13 +6,13 @@ import type {
   NotAbsenceCreatorError, NotAllowedToAssignAbsenceError, NotAllowedToDeleteAbsenceError, NotAllowedToEditAbsenceError,
 } from "./absence-error.ts"
 import {
-  AbsenceActivatedEvent, AbsenceArchivedEvent, AbsenceDeletedEvent, AbsenceDraftedEvent,
-  AbsenceReassignedEvent, AbsenceRescheduledEvent, type AbsenceChangeEvent, type AbsenceCreationEvent,
+  AbsenceActivatedEvent, AbsenceArchivedEvent, AbsenceDraftedEvent,
+  AbsenceReassignedEvent, AbsenceRescheduledEvent, AbsenceWithdrawnEvent,
 } from "./absence-event.ts"
 import { AbsenceId } from "./absence-id.ts"
 import {
   activateAbsencePolicies, archiveAbsencePolicies, checkPolicies, createAbsencePolicies,
-  deleteAbsencePolicies, reassignAbsencePolicies, rescheduleAbsencePolicies,
+  reassignAbsencePolicies, rescheduleAbsencePolicies, withdrawAbsencePolicies,
 } from "./absence-policy.ts"
 import { createPeriod, Period } from "./period.ts"
 
@@ -33,34 +33,12 @@ export const ArchivedAbsence = Schema.TaggedStruct("ArchivedAbsence", {
 })
 export type ArchivedAbsence = typeof ArchivedAbsence.Type
 
-export type Absence = DraftAbsence | ActiveAbsence | ArchivedAbsence   // nothing decodes to it
+// A withdrawn draft: never active, so no activatedAt. Readers see it only where they saw the draft.
+export const DiscardedAbsence = Schema.TaggedStruct("DiscardedAbsence", { ...absenceFields, archivedAt: Schema.DateTimeUtc })
+export type DiscardedAbsence = typeof DiscardedAbsence.Type
+
+export type Absence = DraftAbsence | ActiveAbsence | ArchivedAbsence | DiscardedAbsence   // nothing decodes to it
 export type EditableAbsence = DraftAbsence | ActiveAbsence
-
-// The fields every state has, without its tag and its own fields.
-const absenceFieldsOf = ({ absenceId, organizationId, creatorId, assigneeId, period, createdAt, updatedAt }: Absence) =>
-  ({ absenceId, organizationId, creatorId, assigneeId, period, createdAt, updatedAt })
-
-export const initialAbsence = (event: AbsenceCreationEvent): Absence =>
-  DraftAbsence.make({
-    absenceId: event.absenceId, organizationId: event.organizationId, creatorId: event.creatorId,
-    assigneeId: event.assigneeId, period: event.period, createdAt: event.occurredOn, updatedAt: event.occurredOn,
-  })
-
-export type EvolveAbsenceInput = { readonly absence: Absence; readonly event: AbsenceChangeEvent }
-export const evolveAbsence = ({ absence, event }: EvolveAbsenceInput): Absence =>
-  Match.valueTags(event, {
-    AbsenceRescheduledEvent: (event) => ({ ...absence, period: event.period, updatedAt: event.occurredOn }),
-    AbsenceReassignedEvent: (event) => ({ ...absence, assigneeId: event.assigneeId, updatedAt: event.occurredOn }),
-    AbsenceActivatedEvent: (event) => ActiveAbsence.make({ ...absenceFieldsOf(absence), activatedAt: event.occurredOn, updatedAt: event.occurredOn }),
-    // Only an active absence has the activatedAt an archived one keeps; any other state here is a defect upstream.
-    AbsenceArchivedEvent: (event) => Match.valueTags(absence, {
-      DraftAbsence: (absence): Absence => absence,
-      ActiveAbsence: (absence) => ArchivedAbsence.make({
-        ...absenceFieldsOf(absence), activatedAt: absence.activatedAt, archivedAt: event.occurredOn, updatedAt: event.occurredOn,
-      }),
-      ArchivedAbsence: (absence) => absence,
-    }),
-  })
 
 // The transition and its policies take the same input type.
 export type CreateAbsenceInput = {
@@ -78,7 +56,7 @@ export type ReassignAbsenceInput = {
 }
 export type ActivateAbsenceInput = { readonly absence: DraftAbsence; readonly actor: AbsenceActor; readonly now: DateTime.Utc }
 export type ArchiveAbsenceInput = { readonly absence: ActiveAbsence; readonly actor: AbsenceActor; readonly now: DateTime.Utc }
-export type DeleteAbsenceInput = { readonly absence: EditableAbsence; readonly actor: AbsenceActor; readonly now: DateTime.Utc }
+export type WithdrawAbsenceInput = { readonly absence: EditableAbsence; readonly actor: AbsenceActor; readonly now: DateTime.Utc }
 
 export const createAbsence = (input: CreateAbsenceInput): Result.Result<
   AbsenceDraftedEvent, AssigneeNotInOrganizationError | NotAllowedToAssignAbsenceError | InvalidPeriodError
@@ -132,11 +110,11 @@ export const archiveAbsence = (input: ArchiveAbsenceInput): Result.Result<
   })
 })
 
-export const deleteAbsence = (input: DeleteAbsenceInput): Result.Result<AbsenceDeletedEvent, NotAllowedToDeleteAbsenceError> =>
+export const withdrawAbsence = (input: WithdrawAbsenceInput): Result.Result<AbsenceWithdrawnEvent, NotAllowedToDeleteAbsenceError> =>
   Result.gen(function* () {
-    yield* checkPolicies(deleteAbsencePolicies, input)
-    return AbsenceDeletedEvent.make({
+    yield* checkPolicies(withdrawAbsencePolicies, input)
+    return AbsenceWithdrawnEvent.make({
       absenceId: input.absence.absenceId, organizationId: input.absence.organizationId, actorId: input.actor.userId,
-      occurredOn: input.now, assigneeId: input.absence.assigneeId, period: input.absence.period,
+      occurredOn: input.now,
     })
   })

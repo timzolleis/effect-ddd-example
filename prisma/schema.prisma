@@ -17,6 +17,7 @@ enum AbsenceStatus {
   draft
   active
   archived
+  discarded
 }
 
 model Absence {

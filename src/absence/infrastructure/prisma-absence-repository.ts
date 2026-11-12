@@ -9,10 +9,10 @@ import {
   AbsenceStillDraftError,
 } from "../domain/absence-error.ts"
 import {
-  AbsenceRepository, type DeleteAbsenceInput, type FindAbsenceByIdInput, type InsertAbsenceInput, type UpdateAbsenceInput,
+  AbsenceRepository, type FindAbsenceByIdInput, type InsertAbsenceInput, type PurgeArchivedAbsencesInput, type UpdateAbsenceInput,
 } from "../domain/absence-repository.ts"
 
-// No archivedAt: no find returns an archived absence.
+// No archivedAt: no find returns an archived or discarded absence.
 const absenceSelect = {
   id: true, organizationId: true, creatorId: true, assigneeId: true,
   from: true, to: true, status: true, createdAt: true, updatedAt: true, activatedAt: true,
@@ -63,6 +63,7 @@ const absenceRowFromState = (absence: Absence): Prisma.AbsenceUncheckedCreateInp
     DraftAbsence: (absence) => ({ ...absenceColumnsFromFields(absence), status: AbsenceStatus.draft, activatedAt: null, archivedAt: null }),
     ActiveAbsence: (absence) => ({ ...absenceColumnsFromFields(absence), status: AbsenceStatus.active, activatedAt: DateTime.toDateUtc(absence.activatedAt), archivedAt: null }),
     ArchivedAbsence: (absence) => ({ ...absenceColumnsFromFields(absence), status: AbsenceStatus.archived, activatedAt: DateTime.toDateUtc(absence.activatedAt), archivedAt: DateTime.toDateUtc(absence.archivedAt) }),
+    DiscardedAbsence: (absence) => ({ ...absenceColumnsFromFields(absence), status: AbsenceStatus.discarded, activatedAt: null, archivedAt: DateTime.toDateUtc(absence.archivedAt) }),
   })
 
 // the row the write must still find: before's identity and updatedAt
@@ -86,6 +87,7 @@ export const PrismaAbsenceRepository = Layer.effect(AbsenceRepository, Effect.ge
         Match.when("draft", () => decodeDraftAbsence(row)),
         Match.when("active", () => new AbsenceAlreadyActiveError({ absenceId })),
         Match.when("archived", () => new AbsenceAlreadyArchivedError({ absenceId })),
+        Match.when("discarded", () => new AbsenceAlreadyArchivedError({ absenceId })),
         Match.exhaustive,
       )
     },
@@ -104,6 +106,7 @@ export const PrismaAbsenceRepository = Layer.effect(AbsenceRepository, Effect.ge
         Match.when("draft", () => new AbsenceStillDraftError({ absenceId })),
         Match.when("active", () => decodeActiveAbsence(row)),
         Match.when("archived", () => new AbsenceAlreadyArchivedError({ absenceId })),
+        Match.when("discarded", () => new AbsenceAlreadyArchivedError({ absenceId })),
         Match.exhaustive,
       )
     },
@@ -122,6 +125,7 @@ export const PrismaAbsenceRepository = Layer.effect(AbsenceRepository, Effect.ge
         Match.when("draft", () => decodeDraftAbsence(row)),
         Match.when("active", () => decodeActiveAbsence(row)),
         Match.when("archived", () => new AbsenceAlreadyArchivedError({ absenceId })),
+        Match.when("discarded", () => new AbsenceAlreadyArchivedError({ absenceId })),
         Match.exhaustive,
       )
     },
@@ -151,15 +155,11 @@ export const PrismaAbsenceRepository = Layer.effect(AbsenceRepository, Effect.ge
     },
   )
 
-  const deleteAbsence = Effect.fn("PrismaAbsenceRepository.deleteAbsence")(
-    function* ({ before }: DeleteAbsenceInput) {
-      yield* prisma.absence.delete({ where: absenceGuard(before), select: { id: true } }).pipe(
-        Effect.catchTag(
-          "PrismaRecordNotFoundError",
-          () => new AbsenceChangedConcurrentlyError({ absenceId: before.absenceId }),
-          (error) => Effect.die(error),
-        ),
-      )
+  const purgeArchivedAbsences = Effect.fn("PrismaAbsenceRepository.purgeArchivedAbsences")(
+    function* ({ archivedBefore }: PurgeArchivedAbsencesInput) {
+      yield* prisma.absence.deleteMany({
+        where: { status: { in: [AbsenceStatus.archived, AbsenceStatus.discarded] }, archivedAt: { lt: DateTime.toDateUtc(archivedBefore) } },
+      }).pipe(Effect.orDie)
     },
   )
 
@@ -169,6 +169,6 @@ export const PrismaAbsenceRepository = Layer.effect(AbsenceRepository, Effect.ge
     findEditableAbsenceById,
     insertAbsence,
     updateAbsence,
-    deleteAbsence,
+    purgeArchivedAbsences,
   })
 }))

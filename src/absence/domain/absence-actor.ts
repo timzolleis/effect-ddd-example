@@ -1,15 +1,16 @@
-import { Data } from "effect"
-import type { UserId } from "../../shared/ids.ts"
+import { Data, Schema } from "effect"
+import { UserId } from "../../shared/ids.ts"
 
 // Capabilities, not a role. Every flag holds for the organization of the request.
-export type AbsenceActor = {
-  readonly userId: UserId
-  readonly mayEditOthersAbsences: boolean        // reschedule, reassign, archive someone else's active absence
-  readonly mayDeleteOthersAbsences: boolean      // delete someone else's active absence
-  readonly mayAssignAnyone: boolean              // assign to any member, not only self or related users
-  readonly mayReadOthersAbsences: boolean        // see absences the actor isn't involved in
-  readonly relatedUserIds: ReadonlySet<UserId>   // loaded once per request
-}
+export const AbsenceActor = Schema.Struct({
+  userId: UserId,
+  mayEditOthersAbsences: Schema.Boolean,          // reschedule, reassign, archive someone else's active absence
+  mayDeleteOthersAbsences: Schema.Boolean,        // withdraw someone else's active absence
+  mayAssignAnyone: Schema.Boolean,                // assign to any member, not only self or related users
+  mayReadOthersAbsences: Schema.Boolean,          // see absences the actor isn't involved in
+  relatedUserIds: Schema.ReadonlySet(UserId),     // loaded once per request
+})
+export type AbsenceActor = typeof AbsenceActor.Type
 
 // A read-only principal builds only these.
 export type AbsenceReader = Pick<AbsenceActor, "userId" | "mayReadOthersAbsences" | "relatedUserIds">

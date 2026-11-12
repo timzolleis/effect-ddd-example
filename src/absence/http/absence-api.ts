@@ -28,7 +28,7 @@ export class AbsenceApiGroup extends HttpApiGroup.make("absences")
       success: AbsenceView.pipe(HttpApiSchema.status(201)),
       error: [
         AssigneeNotInOrganizationHttpError, NotAllowedToAssignAbsenceHttpError, InvalidPeriodHttpError, AbsenceChangedConcurrentlyHttpError,
-        AbsenceNotFoundHttpError, // read-back, if the absence is deleted before it
+        AbsenceNotFoundHttpError, // read-back
       ],
     }),
     HttpApiEndpoint.put("rescheduleAbsence", "/absences/:absenceId/period", {

@@ -37,7 +37,7 @@ export class InvalidPeriodError extends Data.TaggedError("InvalidPeriodError")<{
   readonly from: DateTime.Utc; readonly to: DateTime.Utc
 }> {}
 
-// raised by the writes: another write came first (a taken id on insert, a changed row on update or delete)
+// raised by the writes: another write came first (a taken id on insert, a changed row on update)
 export class AbsenceChangedConcurrentlyError extends Data.TaggedError("AbsenceChangedConcurrentlyError")<{ readonly absenceId: AbsenceId }> {}
 
 // Only for the exhaustive HTTP mapper; never in a signature.

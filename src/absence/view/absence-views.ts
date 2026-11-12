@@ -11,7 +11,7 @@ export const AbsenceView = Schema.Struct({
   assigneeId: UserId,
   from: Schema.DateTimeUtc,
   to: Schema.DateTimeUtc,
-  status: Schema.Literals(["draft", "active", "archived"]),
+  status: Schema.Literals(["draft", "active", "archived", "discarded"]),
   createdAt: Schema.DateTimeUtc,
   activatedAt: Schema.NullOr(Schema.DateTimeUtc),
   archivedAt: Schema.NullOr(Schema.DateTimeUtc),
