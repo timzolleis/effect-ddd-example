@@ -5,26 +5,26 @@ import {
   AbsenceEditWindowClosedError, AbsenceOngoingError, AssigneeNotInOrganizationError, NotAbsenceCreatorError,
   NotAllowedToAssignAbsenceError, NotAllowedToDeleteAbsenceError, NotAllowedToEditAbsenceError,
 } from "./absence-error.ts"
-import type {
-  Absence, ActivateAbsenceInput, ArchiveAbsenceInput, CreateAbsenceInput, DraftAbsence,
-  EditableAbsence, ReassignAbsenceInput, RescheduleAbsenceInput, WithdrawAbsenceInput,
-} from "./absence.ts"
+import type { ActiveAbsence, DraftAbsence, EditableAbsence } from "./absence.ts"
 import { isPeriodOngoingAt } from "./period.ts"
 
+type PolicyError<Policy> = Policy extends (input: never) => Result.Result<void, infer Error> ? Error : never
+
 // The first rejection wins.
-export const checkPolicies = <Input, E>(
-  policies: ReadonlyArray<(input: Input) => Result.Result<void, E>>,
+export const checkPolicies = <Input, const Policies extends ReadonlyArray<(input: NoInfer<Input>) => Result.Result<void, unknown>>>(
+  policies: Policies,
   input: Input,
-): Result.Result<void, E> => {
+): Result.Result<void, PolicyError<Policies[number]>> => {
   for (const policy of policies) {
     const policyResult = policy(input)
-    if (Result.isFailure(policyResult)) return policyResult
+    // Cast: the failure holds the error of this policy, one member of PolicyError<Policies[number]>; the loop variable lost which.
+    if (Result.isFailure(policyResult)) return policyResult as Result.Result<void, PolicyError<Policies[number]>>
   }
   return Result.succeed(undefined)
 }
 
 const isActingUser = (input: { readonly actor: AbsenceActor; readonly userId: UserId }) => input.userId === input.actor.userId
-const isAbsenceCreator = (input: { readonly absence: Absence; readonly actor: AbsenceActor }) =>
+const isAbsenceCreator = (input: { readonly absence: EditableAbsence; readonly actor: AbsenceActor }) =>
   isActingUser({ actor: input.actor, userId: input.absence.creatorId })
 const isRelatedToActor = (input: { readonly actor: AbsenceActor; readonly userId: UserId }) =>
   input.actor.relatedUserIds.has(input.userId)
@@ -77,43 +77,7 @@ export const editOnlyInFirstHourPolicy = (input: { readonly absence: EditableAbs
       absenceId: input.absence.absenceId, createdAt: input.absence.createdAt, editableUntil: absenceEditableUntil(input.absence),
     }))
 
-// Per transition: a policy type and an ordered list. The order decides which rejection is reported.
-export type CreateAbsencePolicy = (input: CreateAbsenceInput) =>
-  Result.Result<void, AssigneeNotInOrganizationError | NotAllowedToAssignAbsenceError>
-export const createAbsencePolicies: ReadonlyArray<CreateAbsencePolicy> = [
-  assigneeMustBeInOrganizationPolicy,
-  assigneeMustBeSelfOrRelatedPolicy,
-]
-
-export type RescheduleAbsencePolicy = (input: RescheduleAbsenceInput) =>
-  Result.Result<void, NotAllowedToEditAbsenceError | AbsenceEditWindowClosedError>
-export const rescheduleAbsencePolicies: ReadonlyArray<RescheduleAbsencePolicy> = [
-  onlyCreatorOrPermittedCanEditPolicy,
-  editOnlyInFirstHourPolicy,
-]
-
-export type ReassignAbsencePolicy = (input: ReassignAbsenceInput) => Result.Result<
-  void, NotAllowedToEditAbsenceError | AssigneeNotInOrganizationError | NotAllowedToAssignAbsenceError | AbsenceEditWindowClosedError
->
-export const reassignAbsencePolicies: ReadonlyArray<ReassignAbsencePolicy> = [
-  onlyCreatorOrPermittedCanEditPolicy, // may I touch this absence?
-  assigneeMustBeInOrganizationPolicy,  // is the new assignee in the organization?
-  assigneeMustBeSelfOrRelatedPolicy,   // may I give it to them?
-  editOnlyInFirstHourPolicy,
-]
-
-export type ActivateAbsencePolicy = (input: ActivateAbsenceInput) => Result.Result<void, NotAbsenceCreatorError>
-export const activateAbsencePolicies: ReadonlyArray<ActivateAbsencePolicy> = [onlyCreatorCanActivatePolicy]
-
-export type ArchiveAbsencePolicy = (input: ArchiveAbsenceInput) => Result.Result<void, NotAllowedToEditAbsenceError | AbsenceOngoingError>
-export const cannotArchiveWhileOngoingPolicy: ArchiveAbsencePolicy = (input) =>
+export const cannotArchiveWhileOngoingPolicy = (input: { readonly absence: ActiveAbsence; readonly now: DateTime.Utc }) =>
   isPeriodOngoingAt({ period: input.absence.period, now: input.now })
     ? Result.fail(new AbsenceOngoingError({ absenceId: input.absence.absenceId, period: input.absence.period }))
     : Result.succeed(undefined)
-export const archiveAbsencePolicies: ReadonlyArray<ArchiveAbsencePolicy> = [
-  onlyCreatorOrPermittedCanEditPolicy,
-  cannotArchiveWhileOngoingPolicy,
-]
-
-export type WithdrawAbsencePolicy = (input: WithdrawAbsenceInput) => Result.Result<void, NotAllowedToDeleteAbsenceError>
-export const withdrawAbsencePolicies: ReadonlyArray<WithdrawAbsencePolicy> = [onlyCreatorOrPermittedCanDeletePolicy]
