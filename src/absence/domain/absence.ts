@@ -1,12 +1,13 @@
 import { Result, Schema } from "effect"
 import { Aggregate } from "../../lib/aggregate.ts"
+import { checkRules } from "../../lib/check-rules.ts"
 import { OrganizationId, UserId } from "../../shared/ids.ts"
 import { AbsenceActor } from "./absence-actor.ts"
 import { AbsenceId } from "./absence-id.ts"
 import {
-  assigneeMustBeInOrganizationPolicy, assigneeMustBeSelfOrRelatedPolicy, cannotArchiveWhileOngoingPolicy, checkPolicies, editOnlyInFirstHourPolicy,
-  onlyCreatorCanActivatePolicy, onlyCreatorOrPermittedCanDeletePolicy, onlyCreatorOrPermittedCanEditPolicy,
-} from "./absence-policy.ts"
+  assigneeMustBeInOrganizationRule, assigneeMustBeSelfOrRelatedRule, cannotArchiveWhileOngoingRule, editOnlyInFirstHourRule,
+  onlyCreatorCanActivateRule, onlyCreatorOrPermittedCanDeleteRule, onlyCreatorOrPermittedCanEditRule,
+} from "./absence-rule.ts"
 import { createPeriod, Period } from "./period.ts"
 
 const absenceFields = {
@@ -51,7 +52,7 @@ export const Absence = Aggregate.make("Absence", {
       from: ["initial"],
       event: AbsenceDraftedEvent,
       decide: ({ command, now }) => Result.gen(function* () {
-        yield* checkPolicies([assigneeMustBeInOrganizationPolicy, assigneeMustBeSelfOrRelatedPolicy], {
+        yield* checkRules([assigneeMustBeInOrganizationRule, assigneeMustBeSelfOrRelatedRule], {
           actor: command.actor, assigneeId: command.assigneeId, assigneeIsOrganizationMember: command.assigneeIsOrganizationMember,
         })
         const period = yield* createPeriod({ from: command.from, to: command.to })
@@ -72,7 +73,7 @@ export const Absence = Aggregate.make("Absence", {
       from: [DraftAbsence, ActiveAbsence],
       event: AbsenceRescheduledEvent,
       decide: ({ absence, command, now }) => Result.gen(function* () {
-        yield* checkPolicies([onlyCreatorOrPermittedCanEditPolicy, editOnlyInFirstHourPolicy], { absence, actor: command.actor, now })
+        yield* checkRules([onlyCreatorOrPermittedCanEditRule, editOnlyInFirstHourRule], { absence, actor: command.actor, now })
         const period = yield* createPeriod({ from: command.from, to: command.to })
         return AbsenceRescheduledEvent.make({
           absenceId: absence.absenceId, organizationId: absence.organizationId, actorId: command.actor.userId, occurredOn: now,
@@ -89,8 +90,8 @@ export const Absence = Aggregate.make("Absence", {
       from: [DraftAbsence, ActiveAbsence],
       event: AbsenceReassignedEvent,
       decide: ({ absence, command, now }) => Result.gen(function* () {
-        yield* checkPolicies(
-          [onlyCreatorOrPermittedCanEditPolicy, assigneeMustBeInOrganizationPolicy, assigneeMustBeSelfOrRelatedPolicy, editOnlyInFirstHourPolicy],
+        yield* checkRules(
+          [onlyCreatorOrPermittedCanEditRule, assigneeMustBeInOrganizationRule, assigneeMustBeSelfOrRelatedRule, editOnlyInFirstHourRule],
           { absence, actor: command.actor, assigneeId: command.assigneeId, assigneeIsOrganizationMember: command.assigneeIsOrganizationMember, now },
         )
         return AbsenceReassignedEvent.make({
@@ -108,7 +109,7 @@ export const Absence = Aggregate.make("Absence", {
       from: [DraftAbsence],
       event: AbsenceActivatedEvent,
       decide: ({ absence, command, now }) => Result.gen(function* () {
-        yield* checkPolicies([onlyCreatorCanActivatePolicy], { absence, actor: command.actor, now })
+        yield* onlyCreatorCanActivateRule({ absence, actor: command.actor })
         return AbsenceActivatedEvent.make({
           absenceId: absence.absenceId, organizationId: absence.organizationId, actorId: command.actor.userId, occurredOn: now,
         })
@@ -122,7 +123,7 @@ export const Absence = Aggregate.make("Absence", {
       from: [ActiveAbsence],
       event: AbsenceArchivedEvent,
       decide: ({ absence, command, now }) => Result.gen(function* () {
-        yield* checkPolicies([onlyCreatorOrPermittedCanEditPolicy, cannotArchiveWhileOngoingPolicy], { absence, actor: command.actor, now })
+        yield* checkRules([onlyCreatorOrPermittedCanEditRule, cannotArchiveWhileOngoingRule], { absence, actor: command.actor, now })
         return AbsenceArchivedEvent.make({
           absenceId: absence.absenceId, organizationId: absence.organizationId, actorId: command.actor.userId, occurredOn: now,
         })
@@ -136,7 +137,7 @@ export const Absence = Aggregate.make("Absence", {
       from: [DraftAbsence, ActiveAbsence],
       event: AbsenceWithdrawnEvent,
       decide: ({ absence, command, now }) => Result.gen(function* () {
-        yield* checkPolicies([onlyCreatorOrPermittedCanDeletePolicy], { absence, actor: command.actor, now })
+        yield* onlyCreatorOrPermittedCanDeleteRule({ absence, actor: command.actor })
         return AbsenceWithdrawnEvent.make({
           absenceId: absence.absenceId, organizationId: absence.organizationId, actorId: command.actor.userId, occurredOn: now,
         })

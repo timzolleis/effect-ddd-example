@@ -10,7 +10,7 @@ export class AbsenceStillDraftError extends Data.TaggedError("AbsenceStillDraftE
 export class AbsenceAlreadyActiveError extends Data.TaggedError("AbsenceAlreadyActiveError")<{ readonly absenceId: AbsenceId }> {}
 export class AbsenceAlreadyArchivedError extends Data.TaggedError("AbsenceAlreadyArchivedError")<{ readonly absenceId: AbsenceId }> {}
 
-// raised by the policies and createPeriod
+// raised by the rules and createPeriod
 export class NotAbsenceCreatorError extends Data.TaggedError("NotAbsenceCreatorError")<{
   readonly absenceId: AbsenceId; readonly actorId: UserId
 }> {}

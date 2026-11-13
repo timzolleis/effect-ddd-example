@@ -5,15 +5,16 @@ import type {
 } from "../src/absence/domain/absence-error.ts"
 import { AbsenceId } from "../src/absence/domain/absence-id.ts"
 import {
-  assigneeMustBeInOrganizationPolicy, cannotArchiveWhileOngoingPolicy, checkPolicies, onlyCreatorCanActivatePolicy, onlyCreatorOrPermittedCanDeletePolicy,
-  onlyCreatorOrPermittedCanEditPolicy,
-} from "../src/absence/domain/absence-policy.ts"
+  assigneeMustBeInOrganizationRule, cannotArchiveWhileOngoingRule, onlyCreatorCanActivateRule, onlyCreatorOrPermittedCanDeleteRule,
+  onlyCreatorOrPermittedCanEditRule,
+} from "../src/absence/domain/absence-rule.ts"
 import {
   Absence, AbsenceActivatedEvent, AbsenceArchivedEvent, AbsenceDraftedEvent, type AbsenceEvent, AbsenceReassignedEvent, AbsenceRescheduledEvent,
   AbsenceWithdrawnEvent, ActivateAbsenceCommand, ActiveAbsence, ArchiveAbsenceCommand, ArchivedAbsence, DiscardedAbsence, DraftAbsence,
   DraftAbsenceCommand, type EditableAbsence, ReassignAbsenceCommand, RescheduleAbsenceCommand, WithdrawAbsenceCommand,
 } from "../src/absence/domain/absence.ts"
 import { Aggregate } from "../src/lib/aggregate.ts"
+import { checkRules } from "../src/lib/check-rules.ts"
 
 type Equal<Left, Right> = (<T>() => T extends Left ? 1 : 2) extends (<T>() => T extends Right ? 1 : 2) ? true : false
 const expectTrue = <_Check extends true>() => undefined
@@ -64,7 +65,7 @@ const FromInference = Aggregate.make("Absence", {
       decide: ({ absence, command }) => Result.gen(function* () {
         expectTrue<Equal<typeof absence, DraftAbsence | ActiveAbsence>>()
         expectTrue<Equal<typeof command, WithdrawAbsenceCommand>>()
-        yield* checkPolicies([onlyCreatorOrPermittedCanDeletePolicy], { absence, actor: command.actor })
+        yield* onlyCreatorOrPermittedCanDeleteRule({ absence, actor: command.actor })
         return absenceWithdrawnEvent
       }),
       evolve: {
@@ -114,7 +115,7 @@ const AnyKeyOrder = Aggregate.make("Absence", {
       },
       decide: ({ absence, command }) => Result.gen(function* () {
         expectTrue<Equal<typeof absence, DraftAbsence>>()
-        yield* checkPolicies([onlyCreatorCanActivatePolicy], { absence, actor: command.actor })
+        yield* onlyCreatorCanActivateRule({ absence, actor: command.actor })
         return absenceActivatedEvent
       }),
       from: [DraftAbsence],
@@ -137,14 +138,14 @@ Aggregate.make("Absence", {
       from: [DraftAbsence],
       event: AbsenceArchivedEvent,
       decide: ({ absence, command, now }) => Result.gen(function* () {
-        yield* checkPolicies([
-          onlyCreatorOrPermittedCanEditPolicy,
-          // @ts-expect-error cannotArchiveWhileOngoingPolicy takes an ActiveAbsence
-          cannotArchiveWhileOngoingPolicy,
+        yield* checkRules([
+          onlyCreatorOrPermittedCanEditRule,
+          // @ts-expect-error cannotArchiveWhileOngoingRule takes an ActiveAbsence
+          cannotArchiveWhileOngoingRule,
         ], { absence, actor: command.actor, now })
-        yield* checkPolicies([
+        yield* checkRules([
           // @ts-expect-error the input has no assigneeIsOrganizationMember
-          assigneeMustBeInOrganizationPolicy,
+          assigneeMustBeInOrganizationRule,
         ], { assigneeId: absence.assigneeId })
         return absenceArchivedEvent
       }),
@@ -154,8 +155,8 @@ Aggregate.make("Absence", {
 })
 
 // A rule whose input is derived is one more line: here the assignee check runs on the creator.
-const checkCreatorIsAssignable = (absence: ActiveAbsence) => checkPolicies(
-  [onlyCreatorOrPermittedCanEditPolicy, cannotArchiveWhileOngoingPolicy, assigneeMustBeInOrganizationPolicy],
+const checkCreatorIsAssignable = (absence: ActiveAbsence) => checkRules(
+  [onlyCreatorOrPermittedCanEditRule, cannotArchiveWhileOngoingRule, assigneeMustBeInOrganizationRule],
   { absence, actor: activateAbsenceCommand.actor, now, assigneeId: absence.creatorId, assigneeIsOrganizationMember: true },
 )
 expectTrue<Equal<ReturnType<typeof checkCreatorIsAssignable>, Result.Result<
@@ -529,7 +530,7 @@ Aggregate.make("Absence", {
       decide: () => absenceActivatedEvent,
       evolve: { DraftAbsence: () => activeAbsence },
       // @ts-expect-error rules is not a key of a record
-      rules: [onlyCreatorCanActivatePolicy],
+      rules: [onlyCreatorCanActivateRule],
     },
   },
 })
@@ -595,7 +596,7 @@ const WithMissingEvolve = Aggregate.make("Absence", {
       from: [DraftAbsence],
       event: AbsenceActivatedEvent,
       decide: ({ absence, command }) => Result.gen(function* () {
-        yield* checkPolicies([onlyCreatorCanActivatePolicy], { absence, actor: command.actor })
+        yield* onlyCreatorCanActivateRule({ absence, actor: command.actor })
         return absenceActivatedEvent
       }),
       evolve: { DraftAbsence: ({ absence, event }) => ActiveAbsence.make({ ...absence, activatedAt: event.occurredOn }) },

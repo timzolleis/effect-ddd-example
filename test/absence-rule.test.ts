@@ -1,9 +1,9 @@
 import { describe, expect, it } from "@effect/vitest"
 import { DateTime, Result } from "effect"
 import {
-  absenceEditableUntil, cannotArchiveWhileOngoingPolicy, editOnlyInFirstHourPolicy, onlyCreatorCanActivatePolicy,
-  onlyCreatorOrPermittedCanDeletePolicy, onlyCreatorOrPermittedCanEditPolicy,
-} from "../src/absence/domain/absence-policy.ts"
+  absenceEditableUntil, cannotArchiveWhileOngoingRule, editOnlyInFirstHourRule, onlyCreatorCanActivateRule,
+  onlyCreatorOrPermittedCanDeleteRule, onlyCreatorOrPermittedCanEditRule,
+} from "../src/absence/domain/absence-rule.ts"
 import { generateAbsenceId } from "../src/absence/domain/absence-id.ts"
 import { Absence, DraftAbsenceCommand, ReassignAbsenceCommand } from "../src/absence/domain/absence.ts"
 import { createPeriod } from "../src/absence/domain/period.ts"
@@ -12,7 +12,7 @@ import { alice, at, bob, child, makeActiveAbsence, makeActor, makeDraftAbsence, 
 const failureTag = (result: Result.Result<unknown, { readonly _tag: string }>) =>
   Result.isFailure(result) ? result.failure._tag : "ok"
 
-describe("actor policies: own / others' draft / others' active × flag", () => {
+describe("actor rules: own / others' draft / others' active × flag", () => {
   const draftOfAlice = makeDraftAbsence({ creatorId: alice })
   const activeOfAlice = makeActiveAbsence({ creatorId: alice })
   const cases = [
@@ -26,18 +26,18 @@ describe("actor policies: own / others' draft / others' active × flag", () => {
     { absence: activeOfAlice, actor: makeActor({ userId: bob, mayDeleteOthersAbsences: true }), edit: "NotAllowedToEditAbsenceError", delete: "ok" },
   ]
   it.each(cases)("$absence._tag by $actor.userId → edit $edit, delete $delete", ({ absence, actor, ...expected }) => {
-    expect(failureTag(onlyCreatorOrPermittedCanEditPolicy({ absence, actor }))).toBe(expected.edit)
-    expect(failureTag(onlyCreatorOrPermittedCanDeletePolicy({ absence, actor }))).toBe(expected.delete)
+    expect(failureTag(onlyCreatorOrPermittedCanEditRule({ absence, actor }))).toBe(expected.edit)
+    expect(failureTag(onlyCreatorOrPermittedCanDeleteRule({ absence, actor }))).toBe(expected.delete)
   })
 
   it("only the creator activates", () => {
-    expect(failureTag(onlyCreatorCanActivatePolicy({ absence: draftOfAlice, actor: makeActor({ userId: alice }) }))).toBe("ok")
-    expect(failureTag(onlyCreatorCanActivatePolicy({ absence: draftOfAlice, actor: makeActor({ userId: bob, mayEditOthersAbsences: true }) })))
+    expect(failureTag(onlyCreatorCanActivateRule({ absence: draftOfAlice, actor: makeActor({ userId: alice }) }))).toBe("ok")
+    expect(failureTag(onlyCreatorCanActivateRule({ absence: draftOfAlice, actor: makeActor({ userId: bob, mayEditOthersAbsences: true }) })))
       .toBe("NotAbsenceCreatorError")
   })
 })
 
-describe("assignee policies: membership × self / related / unrelated × mayAssignAnyone", () => {
+describe("assignee rules: membership × self / related / unrelated × mayAssignAnyone", () => {
   const cases = [
     { assigneeId: alice, member: true, mayAssignAnyone: false, expected: "ok" },
     { assigneeId: child, member: true, mayAssignAnyone: false, expected: "ok" },
@@ -58,19 +58,19 @@ describe("assignee policies: membership × self / related / unrelated × mayAssi
   })
 })
 
-describe("time policies at the boundary", () => {
+describe("time rules at the boundary", () => {
   it("edit window: open at exactly createdAt + 1h, closed 1 ms after", () => {
     const absence = makeDraftAbsence({ createdAt: at("2026-02-01T10:00:00Z") })
     const until = absenceEditableUntil(absence)
     expect(DateTime.formatIso(until)).toBe("2026-02-01T11:00:00.000Z")
-    expect(failureTag(editOnlyInFirstHourPolicy({ absence, now: until }))).toBe("ok")
-    expect(failureTag(editOnlyInFirstHourPolicy({ absence, now: DateTime.add(until, { milliseconds: 1 }) })))
+    expect(failureTag(editOnlyInFirstHourRule({ absence, now: until }))).toBe("ok")
+    expect(failureTag(editOnlyInFirstHourRule({ absence, now: DateTime.add(until, { milliseconds: 1 }) })))
       .toBe("AbsenceEditWindowClosedError")
   })
 
   it("ongoing: from <= now < to", () => {
     const absence = makeActiveAbsence()
-    const archiveAt = (now: DateTime.Utc) => failureTag(cannotArchiveWhileOngoingPolicy({ absence, now }))
+    const archiveAt = (now: DateTime.Utc) => failureTag(cannotArchiveWhileOngoingRule({ absence, now }))
     expect(archiveAt(DateTime.subtract(absence.period.from, { milliseconds: 1 }))).toBe("ok")
     expect(archiveAt(absence.period.from)).toBe("AbsenceOngoingError")
     expect(archiveAt(DateTime.subtract(absence.period.to, { milliseconds: 1 }))).toBe("AbsenceOngoingError")
