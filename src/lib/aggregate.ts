@@ -59,7 +59,6 @@ type EveryStateReachable<States, Evolves> = unknown extends NextStates<Evolves> 
 
 // any: while a broken definition drops the inferred decides, calls of the other commands keep compiling (the error stays on the definition).
 type DecisionOfCall<Decision, EventSchema> = unknown extends Decision ? Result.Result<EventTypeOf<EventSchema>, any> : Decision
-type CommandTagsAccepting<Froms, StateTag> = { [Tag in keyof Froms]: StateTag extends StateTagOfFrom<Froms[Tag]> ? Tag : never }[keyof Froms]
 type CommandTagDeciding<Events, EventTag> = { [Tag in keyof Events]: EventTypeOf<Events[Tag]> extends { readonly _tag: EventTag } ? Tag : never }[keyof Events]
 type StateInputOfCall<Name extends string, States extends AnySchemasByTag, AcceptingStateTags, State> = [AcceptingStateTags] extends ["start"]
   ? {}
@@ -76,7 +75,10 @@ export type Aggregate<Name extends string, States extends AnySchemasByTag, Comma
   readonly states: States
   readonly commands: Commands
   readonly events: EventSchemasByTag<Events>
-  readonly accepts: { readonly [StateTag in "start" | keyof States]: ReadonlyArray<CommandTagsAccepting<Froms, StateTag>> }
+  readonly accepts: {
+    readonly [StateTag in "start" | keyof States]: ReadonlyArray<{ [Tag in keyof Froms]: StateTag extends StateTagOfFrom<Froms[Tag]> ? Tag : never }[keyof Froms]>
+  }
+  readonly from: { readonly [Tag in keyof Froms]: ReadonlyArray<StateTagOfFrom<Froms[Tag]>> }
   readonly decide: <Command extends TypeUnion<Commands>, State extends TypeUnion<States> = never>(
     input: { readonly command: Command } & Now & StateInputOfCall<Name, States, StateTagOfFrom<Froms[Command["_tag"] & keyof Froms]>, State>,
   ) => DecisionOfCall<Decisions[Command["_tag"] & keyof Decisions], Events[Command["_tag"] & keyof Events]>
@@ -92,6 +94,8 @@ export declare namespace Aggregate {
   export type Event<Self extends { readonly events: AnySchemasByTag }> = TypeUnion<Self["events"]>
   export type Accepts<Self extends { readonly accepts: object }, StateTag extends keyof Self["accepts"]> =
     Self["accepts"][StateTag] extends ReadonlyArray<infer Tag> ? Tag : never
+  export type From<Self extends { readonly from: object }, CommandTag extends keyof Self["from"]> =
+    Self["from"][CommandTag] extends ReadonlyArray<infer StateTag> ? StateTag : never
 }
 
 type UntypedHandler = (input: object) => unknown
@@ -161,6 +165,7 @@ const make = <
     stateTag,
     recordEntries.filter(({ fromStateTags }) => fromStateTags.includes(stateTag)).map(({ commandTag }) => commandTag),
   ]))
+  const from = Object.fromEntries(recordEntries.map(({ commandTag, fromStateTags }) => [commandTag, fromStateTags]))
   const events = Object.fromEntries(recordEntries.map(({ eventTag, record }) => [eventTag, record.event]))
   const stateOf = (input: object) =>
     (input as { readonly [argument: string]: Tagged | undefined })[stateArgumentName] // Cast: Aggregate's signatures only let a state of States in.
@@ -182,7 +187,7 @@ const make = <
     const { _tag, ...stateFields } = state
     return evolveOfState({ event: input.event, [stateArgumentName]: stateFields })
   }
-  const untypedAggregate: object = { name, states: definition.states, commands: definition.commands, events, accepts, decide, evolve }
+  const untypedAggregate: object = { name, states: definition.states, commands: definition.commands, events, accepts, from, decide, evolve }
   // Cast: Aggregate's signatures derive each result from the records; the untyped lookups return unknown.
   return untypedAggregate as Aggregate<Name, States, Commands, Froms, Events, Decisions, Evolves>
 }
