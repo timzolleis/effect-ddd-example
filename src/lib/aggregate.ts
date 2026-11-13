@@ -66,7 +66,7 @@ type StateInputOfCall<Name extends string, States extends AnySchemasByTag, Accep
 type StateTagOfCall<State extends Tagged> = [State] extends [never] ? "initial" : State["_tag"]
 type CommandTagsAcceptedIn<Froms, StateTag> = { [Tag in keyof Froms]: [StateTag] extends [StateTagOfFrom<Froms[Tag]>] ? Tag : never }[keyof Froms]
 type CommandAcceptedIn<Commands extends AnySchemasByTag, Froms, State extends Tagged> =
-  [State] extends [never] ? TypeUnion<Commands> : CommandTypeOf<Commands, CommandTagsAcceptedIn<Froms, State["_tag"]>>
+  CommandTypeOf<Commands, CommandTagsAcceptedIn<Froms, StateTagOfCall<State>>>
 type IsAny<Type> = 0 extends 1 & Type ? true : false
 type StateTagsAccepting<States, Froms, CommandTag, StateTag = "initial" | keyof States> = StateTag extends unknown
   ? [CommandTag] extends [CommandTagsAcceptedIn<Froms, StateTag>] ? StateTag : never
@@ -76,6 +76,7 @@ type StateAccepting<States extends AnySchemasByTag, Froms, Command extends Tagge
 type CommandInputOfDecide<Commands extends AnySchemasByTag, States extends AnySchemasByTag, Froms, State extends Tagged, Command extends Tagged> =
   & { readonly command: Command | CommandAcceptedIn<Commands, Froms, State> }
   & (IsAny<Command> extends true ? {}
+    : [State] extends [never] ? {}
     : [Command] extends [CommandAcceptedIn<Commands, Froms, State>] ? {}
     : {
       readonly command: {

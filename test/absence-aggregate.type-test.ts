@@ -205,6 +205,7 @@ type DecideInput<State extends AbsenceState, Command extends Aggregate.Command<t
   Parameters<typeof Absence.decide<State, Command>>[0]
 expectTrue<Equal<DecideInput<ActiveAbsence, never>["command"],
   ArchiveAbsenceCommand | ReassignAbsenceCommand | RescheduleAbsenceCommand | WithdrawAbsenceCommand>>()
+expectTrue<Equal<DecideInput<never, never>["command"], DraftAbsenceCommand>>()
 expectTrue<Equal<DecideInput<never, ArchiveAbsenceCommand>["absence"], ActiveAbsence>>()
 expectTrue<Equal<DecideInput<ActiveAbsence, WithdrawAbsenceCommand>["absence"], ActiveAbsence | DraftAbsence>>()
 expectTrue<Equal<DecideInput<never, RescheduleAbsenceCommand | ActivateAbsenceCommand>["absence"], DraftAbsence>>()
