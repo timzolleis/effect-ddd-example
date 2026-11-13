@@ -59,7 +59,7 @@ export const Absence = Aggregate.make("Absence", {
 
   handlers: {
     DraftAbsenceCommand: {
-      from: ["start"],
+      from: ["initial"],
       event: AbsenceDraftedEvent,
       decide: ({ command, now }) => Result.gen(function* () {
         yield* checkPolicies([assigneeMustBeInOrganizationPolicy, assigneeMustBeSelfOrRelatedPolicy], {
@@ -72,7 +72,7 @@ export const Absence = Aggregate.make("Absence", {
         })
       }),
       evolve: {
-        start: ({ event }) => DraftAbsence.make({
+        initial: ({ event }) => DraftAbsence.make({
           absenceId: event.absenceId, organizationId: event.organizationId, creatorId: event.creatorId,
           assigneeId: event.assigneeId, period: event.period, createdAt: event.occurredOn, updatedAt: event.occurredOn,
         }),

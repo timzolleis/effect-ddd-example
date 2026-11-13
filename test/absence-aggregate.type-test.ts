@@ -50,7 +50,7 @@ const FromInference = Aggregate.make("Absence", {
   commands: { DraftAbsenceCommand, WithdrawAbsenceCommand, ActivateAbsenceCommand },
   handlers: {
     DraftAbsenceCommand: {
-      from: ["start"],
+      from: ["initial"],
       event: AbsenceDraftedEvent,
       decide: ({ command, now }) => {
         expectTrue<Equal<typeof command, DraftAbsenceCommand>>()
@@ -58,7 +58,7 @@ const FromInference = Aggregate.make("Absence", {
         return absenceDraftedEvent
       },
       evolve: {
-        start: ({ event }) => {
+        initial: ({ event }) => {
           expectTrue<Equal<typeof event, AbsenceDraftedEvent>>()
           return draftAbsence
         },
@@ -109,7 +109,7 @@ const AnyKeyOrder = Aggregate.make("Absence", {
   states: { DraftAbsence, ActiveAbsence },
   commands: { DraftAbsenceCommand, ActivateAbsenceCommand },
   handlers: {
-    DraftAbsenceCommand: { evolve: { start: () => draftAbsence }, decide: () => absenceDraftedEvent, event: AbsenceDraftedEvent, from: ["start"] },
+    DraftAbsenceCommand: { evolve: { initial: () => draftAbsence }, decide: () => absenceDraftedEvent, event: AbsenceDraftedEvent, from: ["initial"] },
     ActivateAbsenceCommand: {
       event: AbsenceActivatedEvent,
       evolve: {
@@ -138,7 +138,7 @@ Aggregate.make("Absence", {
   states: { DraftAbsence, ActiveAbsence },
   commands: { DraftAbsenceCommand, ArchiveAbsenceCommand },
   handlers: {
-    DraftAbsenceCommand: { from: ["start"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { start: () => draftAbsence } },
+    DraftAbsenceCommand: { from: ["initial"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { initial: () => draftAbsence } },
     ArchiveAbsenceCommand: {
       from: [DraftAbsence],
       event: AbsenceArchivedEvent,
@@ -244,7 +244,7 @@ const WithoutRule = Aggregate.make("Absence", {
   states: { DraftAbsence, ActiveAbsence, ArchivedAbsence },
   commands: { DraftAbsenceCommand, ActivateAbsenceCommand, ArchiveAbsenceCommand },
   handlers: {
-    DraftAbsenceCommand: { from: ["start"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { start: () => draftAbsence } },
+    DraftAbsenceCommand: { from: ["initial"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { initial: () => draftAbsence } },
     ActivateAbsenceCommand: { from: [DraftAbsence], event: AbsenceActivatedEvent, decide: () => absenceActivatedEvent, evolve: { DraftAbsence: () => activeAbsence } },
     ArchiveAbsenceCommand: {
       from: [ActiveAbsence],
@@ -267,7 +267,7 @@ expectTrue<Equal<typeof Absence.events.AbsenceArchivedEvent, typeof AbsenceArchi
 expectTrue<Equal<AbsenceEvent, AbsenceDraftedEvent | AbsenceRescheduledEvent | AbsenceReassignedEvent | AbsenceActivatedEvent | AbsenceArchivedEvent | AbsenceWithdrawnEvent>>()
 
 // What a state accepts, derived from the from lists.
-expectTrue<Equal<Aggregate.Accepts<typeof Absence, "start">, "DraftAbsenceCommand">>()
+expectTrue<Equal<Aggregate.Accepts<typeof Absence, "initial">, "DraftAbsenceCommand">>()
 expectTrue<Equal<Aggregate.Accepts<typeof Absence, "DraftAbsence">,
   "RescheduleAbsenceCommand" | "ReassignAbsenceCommand" | "ActivateAbsenceCommand" | "WithdrawAbsenceCommand">>()
 expectTrue<Equal<Aggregate.Accepts<typeof Absence, "ActiveAbsence">,
@@ -277,12 +277,42 @@ expectTrue<Equal<typeof Absence.accepts.ActiveAbsence,
   ReadonlyArray<"RescheduleAbsenceCommand" | "ReassignAbsenceCommand" | "ArchiveAbsenceCommand" | "WithdrawAbsenceCommand">>>()
 
 // Which states accept a command, the same from lists read the other way.
-expectTrue<Equal<Aggregate.From<typeof Absence, "DraftAbsenceCommand">, "start">>()
-expectTrue<Equal<Aggregate.From<typeof Absence, "RescheduleAbsenceCommand">, "DraftAbsence" | "ActiveAbsence">>()
-expectTrue<Equal<Aggregate.From<typeof Absence, "ActivateAbsenceCommand">, "DraftAbsence">>()
-expectTrue<Equal<Aggregate.From<typeof Absence, "ArchiveAbsenceCommand">, "ActiveAbsence">>()
-expectTrue<Equal<typeof Absence.from.RescheduleAbsenceCommand, ReadonlyArray<"DraftAbsence" | "ActiveAbsence">>>()
-expectTrue<Equal<keyof typeof Absence.from, Aggregate.Command<typeof Absence>["_tag"]>>()
+expectTrue<Equal<Aggregate.AcceptedIn<typeof Absence, "DraftAbsenceCommand">, "initial">>()
+expectTrue<Equal<Aggregate.AcceptedIn<typeof Absence, "RescheduleAbsenceCommand">, "DraftAbsence" | "ActiveAbsence">>()
+expectTrue<Equal<Aggregate.AcceptedIn<typeof Absence, "ActivateAbsenceCommand">, "DraftAbsence">>()
+expectTrue<Equal<Aggregate.AcceptedIn<typeof Absence, "ArchiveAbsenceCommand">, "ActiveAbsence">>()
+expectTrue<Equal<typeof Absence.acceptedIn.RescheduleAbsenceCommand, ReadonlyArray<"DraftAbsence" | "ActiveAbsence">>>()
+expectTrue<Equal<keyof typeof Absence.acceptedIn, Aggregate.Command<typeof Absence>["_tag"]>>()
+
+// initial marks no state yet, so no state may take its name; start is an ordinary state name.
+const InitialAbsence = Schema.TaggedStruct("initial", { absenceId: AbsenceId })
+Aggregate.make("Absence", {
+  id: AbsenceId,
+  states: {
+    // @ts-expect-error initial is the marker for no state yet
+    initial: InitialAbsence,
+    DraftAbsence,
+  },
+  commands: { DraftAbsenceCommand },
+  handlers: {
+    DraftAbsenceCommand: { from: ["initial"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { initial: () => draftAbsence } },
+  },
+})
+const StartAbsence = Schema.TaggedStruct("start", { absenceId: AbsenceId })
+const WithStartState = Aggregate.make("Absence", {
+  id: AbsenceId,
+  states: { start: StartAbsence, DraftAbsence },
+  commands: { DraftAbsenceCommand, ActivateAbsenceCommand },
+  handlers: {
+    DraftAbsenceCommand: {
+      from: ["initial"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent,
+      evolve: { initial: ({ event }) => StartAbsence.make({ absenceId: event.absenceId }) },
+    },
+    ActivateAbsenceCommand: { from: [StartAbsence], event: AbsenceActivatedEvent, decide: () => absenceActivatedEvent, evolve: { start: () => draftAbsence } },
+  },
+})
+expectTrue<Equal<Aggregate.Accepts<typeof WithStartState, "start">, "ActivateAbsenceCommand">>()
+expectTrue<Equal<Aggregate.AcceptedIn<typeof WithStartState, "ActivateAbsenceCommand">, "start">>()
 
 // Terminal states need no record; a state that no evolve returns is a compile error on states.
 Aggregate.make("Absence", {
@@ -290,7 +320,7 @@ Aggregate.make("Absence", {
   states: { DraftAbsence, ActiveAbsence, ArchivedAbsence },
   commands: { DraftAbsenceCommand, ActivateAbsenceCommand, ArchiveAbsenceCommand },
   handlers: {
-    DraftAbsenceCommand: { from: ["start"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { start: () => draftAbsence } },
+    DraftAbsenceCommand: { from: ["initial"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { initial: () => draftAbsence } },
     ActivateAbsenceCommand: { from: [DraftAbsence], event: AbsenceActivatedEvent, decide: () => absenceActivatedEvent, evolve: { DraftAbsence: () => activeAbsence } },
     ArchiveAbsenceCommand: { from: [ActiveAbsence], event: AbsenceArchivedEvent, decide: () => absenceArchivedEvent, evolve: { ActiveAbsence: () => archivedAbsence } },
   },
@@ -301,7 +331,7 @@ Aggregate.make("Absence", {
   states: { DraftAbsence, ActiveAbsence, ArchivedAbsence },
   commands: { DraftAbsenceCommand, ActivateAbsenceCommand },
   handlers: {
-    DraftAbsenceCommand: { from: ["start"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { start: () => draftAbsence } },
+    DraftAbsenceCommand: { from: ["initial"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { initial: () => draftAbsence } },
     ActivateAbsenceCommand: { from: [DraftAbsence], event: AbsenceActivatedEvent, decide: () => absenceActivatedEvent, evolve: { DraftAbsence: () => activeAbsence } },
   },
 })
@@ -313,7 +343,7 @@ Aggregate.make("Absence", {
   commands: { DraftAbsenceCommand, ActivateAbsenceCommand, ArchiveAbsenceCommand },
   // @ts-expect-error ArchiveAbsenceCommand has no record
   handlers: {
-    DraftAbsenceCommand: { from: ["start"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { start: () => draftAbsence } },
+    DraftAbsenceCommand: { from: ["initial"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { initial: () => draftAbsence } },
     ActivateAbsenceCommand: { from: [DraftAbsence], event: AbsenceActivatedEvent, decide: () => absenceActivatedEvent, evolve: { DraftAbsence: () => activeAbsence } },
   },
 })
@@ -322,7 +352,7 @@ Aggregate.make("Absence", {
   states: { DraftAbsence, ActiveAbsence },
   commands: { DraftAbsenceCommand, ActivateAbsenceCommand },
   handlers: {
-    DraftAbsenceCommand: { from: ["start"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { start: () => draftAbsence } },
+    DraftAbsenceCommand: { from: ["initial"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { initial: () => draftAbsence } },
     ActivateAbsenceCommand: { from: [DraftAbsence], event: AbsenceActivatedEvent, decide: () => absenceActivatedEvent, evolve: { DraftAbsence: () => activeAbsence } },
     // @ts-expect-error ArchiveAbsenceCommand is not in commands
     ArchiveAbsenceCommand: { from: [ActiveAbsence], event: AbsenceArchivedEvent, decide: () => absenceArchivedEvent, evolve: { ActiveAbsence: () => activeAbsence } },
@@ -334,20 +364,20 @@ Aggregate.make("Absence", {
   commands: { DraftAbsenceCommand, ArchiveAbsenceCommand, WithdrawAbsenceCommand },
   // @ts-expect-error ArchiveAbsenceCommand and WithdrawAbsenceCommand decide the same event
   handlers: {
-    DraftAbsenceCommand: { from: ["start"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { start: () => draftAbsence } },
+    DraftAbsenceCommand: { from: ["initial"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { initial: () => draftAbsence } },
     ArchiveAbsenceCommand: { from: [ActiveAbsence], event: AbsenceArchivedEvent, decide: () => absenceArchivedEvent, evolve: { ActiveAbsence: () => archivedAbsence } },
     WithdrawAbsenceCommand: { from: [DraftAbsence], event: AbsenceArchivedEvent, decide: () => absenceArchivedEvent, evolve: { DraftAbsence: () => activeAbsence } },
   },
 })
 
-// from: a schema outside states, and start beside a state, are errors on that entry.
+// from: a schema outside states, and initial beside a state, are errors on that entry.
 const CancelledAbsence = Schema.TaggedStruct("CancelledAbsence", { absenceId: AbsenceId })
 Aggregate.make("Absence", {
   id: AbsenceId,
   states: { DraftAbsence, ActiveAbsence },
   commands: { DraftAbsenceCommand, ActivateAbsenceCommand },
   handlers: {
-    DraftAbsenceCommand: { from: ["start"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { start: () => draftAbsence } },
+    DraftAbsenceCommand: { from: ["initial"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { initial: () => draftAbsence } },
     ActivateAbsenceCommand: {
       // @ts-expect-error CancelledAbsence is not in states
       from: [DraftAbsence, CancelledAbsence],
@@ -362,13 +392,13 @@ Aggregate.make("Absence", {
   states: { DraftAbsence, ActiveAbsence },
   commands: { DraftAbsenceCommand, ActivateAbsenceCommand },
   handlers: {
-    DraftAbsenceCommand: { from: ["start"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { start: () => draftAbsence } },
+    DraftAbsenceCommand: { from: ["initial"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { initial: () => draftAbsence } },
     ActivateAbsenceCommand: {
-      // @ts-expect-error start takes no state, so it cannot share a command with DraftAbsence
-      from: ["start", DraftAbsence],
+      // @ts-expect-error initial takes no state, so it cannot share a command with DraftAbsence
+      from: ["initial", DraftAbsence],
       event: AbsenceActivatedEvent,
       decide: () => absenceActivatedEvent,
-      evolve: { start: () => activeAbsence, DraftAbsence: () => activeAbsence },
+      evolve: { initial: () => activeAbsence, DraftAbsence: () => activeAbsence },
     },
   },
 })
@@ -379,7 +409,7 @@ Aggregate.make("Absence", {
   states: { DraftAbsence, ActiveAbsence, ArchivedAbsence },
   commands: { DraftAbsenceCommand, ActivateAbsenceCommand, WithdrawAbsenceCommand },
   handlers: {
-    DraftAbsenceCommand: { from: ["start"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { start: () => draftAbsence } },
+    DraftAbsenceCommand: { from: ["initial"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { initial: () => draftAbsence } },
     ActivateAbsenceCommand: { from: [DraftAbsence], event: AbsenceActivatedEvent, decide: () => absenceActivatedEvent, evolve: { DraftAbsence: () => activeAbsence } },
     WithdrawAbsenceCommand: {
       from: [DraftAbsence, ActiveAbsence],
@@ -395,7 +425,7 @@ Aggregate.make("Absence", {
   states: { DraftAbsence, ActiveAbsence, ArchivedAbsence },
   commands: { DraftAbsenceCommand, ActivateAbsenceCommand },
   handlers: {
-    DraftAbsenceCommand: { from: ["start"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { start: () => draftAbsence } },
+    DraftAbsenceCommand: { from: ["initial"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { initial: () => draftAbsence } },
     ActivateAbsenceCommand: {
       from: [DraftAbsence],
       event: AbsenceActivatedEvent,
@@ -413,7 +443,7 @@ Aggregate.make("Absence", {
   states: { DraftAbsence, ActiveAbsence },
   commands: { DraftAbsenceCommand, ActivateAbsenceCommand },
   handlers: {
-    DraftAbsenceCommand: { from: ["start"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { start: () => draftAbsence } },
+    DraftAbsenceCommand: { from: ["initial"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { initial: () => draftAbsence } },
     ActivateAbsenceCommand: {
       from: [DraftAbsence],
       event: AbsenceActivatedEvent,
@@ -433,7 +463,7 @@ Aggregate.make("Absence", {
   states: { DraftAbsence, ActiveAbsence },
   commands: { DraftAbsenceCommand, ActivateAbsenceCommand },
   handlers: {
-    DraftAbsenceCommand: { from: ["start"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { start: () => draftAbsence } },
+    DraftAbsenceCommand: { from: ["initial"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { initial: () => draftAbsence } },
     ActivateAbsenceCommand: {
       from: [DraftAbsence],
       event: AbsenceActivatedEvent,
@@ -451,7 +481,7 @@ Aggregate.make("Absence", {
   states: { DraftAbsence, ActiveAbsence, ArchivedAbsence },
   commands: { DraftAbsenceCommand, ActivateAbsenceCommand, ArchiveAbsenceCommand },
   handlers: {
-    DraftAbsenceCommand: { from: ["start"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { start: () => draftAbsence } },
+    DraftAbsenceCommand: { from: ["initial"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { initial: () => draftAbsence } },
     ActivateAbsenceCommand: {
       from: [DraftAbsence],
       event: AbsenceActivatedEvent,
@@ -482,7 +512,7 @@ Aggregate.make("Absence", {
   states: { DraftAbsence, ActiveAbsence },
   commands: { DraftAbsenceCommand, ActivateAbsenceCommand },
   handlers: {
-    DraftAbsenceCommand: { from: ["start"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { start: () => draftAbsence } },
+    DraftAbsenceCommand: { from: ["initial"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { initial: () => draftAbsence } },
     ActivateAbsenceCommand: {
       from: [DraftAbsence],
       event: AbsenceActivatedEvent,
@@ -501,7 +531,7 @@ const WithMissingEvolve = Aggregate.make("Absence", {
   states: { DraftAbsence, ActiveAbsence, DiscardedAbsence },
   commands: { DraftAbsenceCommand, ActivateAbsenceCommand, WithdrawAbsenceCommand },
   handlers: {
-    DraftAbsenceCommand: { from: ["start"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { start: () => draftAbsence } },
+    DraftAbsenceCommand: { from: ["initial"], event: AbsenceDraftedEvent, decide: () => absenceDraftedEvent, evolve: { initial: () => draftAbsence } },
     ActivateAbsenceCommand: {
       from: [DraftAbsence],
       event: AbsenceActivatedEvent,

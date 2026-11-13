@@ -3,7 +3,7 @@ import type { DateTime, Result, Schema } from "effect"
 type Tagged = { readonly _tag: string }
 type SchemasByTag<Schemas> = { readonly [Tag in keyof Schemas]: Schema.Top & { readonly Type: { readonly _tag: Tag & string } } }
 type StateSchemasByTag<States> = {
-  readonly [Tag in keyof States]: Tag extends "start" ? never : Schema.Top & { readonly Type: { readonly _tag: Tag & string } }
+  readonly [Tag in keyof States]: Tag extends "initial" ? never : Schema.Top & { readonly Type: { readonly _tag: Tag & string } }
 }
 type AnySchemasByTag = { readonly [Tag in string]: { readonly Type: Tagged } }
 type TypeUnion<Schemas extends AnySchemasByTag> = Schemas[keyof Schemas]["Type"]
@@ -16,14 +16,14 @@ type StateArgument<Name extends string, State> = { readonly [Key in Uncapitalize
 type StateFields<State> = State extends unknown ? Omit<State, "_tag"> : never
 type Now = { readonly now: DateTime.Utc }
 
-type FromEntry = "start" | { readonly Type: Tagged }
-type StateOfFrom<From> = From extends ReadonlyArray<infer Entry> ? Exclude<Entry, "start"> extends { readonly Type: infer State } ? State : never : never
+type FromEntry = "initial" | { readonly Type: Tagged }
+type StateOfFrom<From> = From extends ReadonlyArray<infer Entry> ? Exclude<Entry, "initial"> extends { readonly Type: infer State } ? State : never : never
 type StateTagOfFrom<From> = From extends ReadonlyArray<infer Entry>
-  ? (Entry extends "start" ? "start" : never) | (StateOfFrom<From> extends Tagged ? StateOfFrom<From>["_tag"] : never)
+  ? (Entry extends "initial" ? "initial" : never) | (StateOfFrom<From> extends Tagged ? StateOfFrom<From>["_tag"] : never)
   : never
 type CheckedFrom<States, From> = {
-  readonly [Index in keyof From]: From[Index] extends "start"
-    ? From extends readonly ["start"] ? From[Index] : { readonly "start cannot share a command with a state": From }
+  readonly [Index in keyof From]: From[Index] extends "initial"
+    ? From extends readonly ["initial"] ? From[Index] : { readonly "initial cannot share a command with a state": From }
     : From[Index] extends States[keyof States] ? From[Index]
     : { readonly "no state of the aggregate has this name": From[Index] extends { readonly Type: Tagged } ? From[Index]["Type"]["_tag"] : From[Index] }
 }
@@ -34,7 +34,7 @@ type DecideInput<Name extends string, States extends AnySchemasByTag, From, Comm
   & Now
 type EvolveInput<Name extends string, States extends AnySchemasByTag, StateTag, Event> = StateTag extends keyof States
   ? StateArgument<Name, StateFields<States[StateTag]["Type"]>> & { readonly event: Event }
-  : StateTag extends "start" ? { readonly event: Event }
+  : StateTag extends "initial" ? { readonly event: Event }
   // any: a state in from but not in states is already an error on its from entry; one more per handler would only repeat it.
   : StateArgument<Name, any> & { readonly event: Event }
 type EventTypeOf<EventSchema> = EventSchema extends { readonly Type: infer Event } ? Event : never
@@ -60,10 +60,10 @@ type EveryStateReachable<States, Evolves> = unknown extends NextStates<Evolves> 
 // any: while a broken definition drops the inferred decides, calls of the other commands keep compiling (the error stays on the definition).
 type DecisionOfCall<Decision, EventSchema> = unknown extends Decision ? Result.Result<EventTypeOf<EventSchema>, any> : Decision
 type CommandTagDeciding<Events, EventTag> = { [Tag in keyof Events]: EventTypeOf<Events[Tag]> extends { readonly _tag: EventTag } ? Tag : never }[keyof Events]
-type StateInputOfCall<Name extends string, States extends AnySchemasByTag, AcceptingStateTags, State> = [AcceptingStateTags] extends ["start"]
+type StateInputOfCall<Name extends string, States extends AnySchemasByTag, AcceptingStateTags, State> = [AcceptingStateTags] extends ["initial"]
   ? {}
   : StateArgument<Name, [State] extends [States[AcceptingStateTags & keyof States]["Type"]] ? State : States[AcceptingStateTags & keyof States]["Type"]>
-type StateTagOfCall<State extends Tagged> = [State] extends [never] ? "start" : State["_tag"]
+type StateTagOfCall<State extends Tagged> = [State] extends [never] ? "initial" : State["_tag"]
 // any: same as DecisionOfCall, for the evolves.
 type NextStateOfCall<Evolve, StateTag> = unknown extends Evolve ? any : NextStateOfEvolve<Evolve[StateTag & keyof Evolve]>
 type EventSchemasByTag<Events> = {
@@ -76,9 +76,9 @@ export type Aggregate<Name extends string, States extends AnySchemasByTag, Comma
   readonly commands: Commands
   readonly events: EventSchemasByTag<Events>
   readonly accepts: {
-    readonly [StateTag in "start" | keyof States]: ReadonlyArray<{ [Tag in keyof Froms]: StateTag extends StateTagOfFrom<Froms[Tag]> ? Tag : never }[keyof Froms]>
+    readonly [StateTag in "initial" | keyof States]: ReadonlyArray<{ [Tag in keyof Froms]: StateTag extends StateTagOfFrom<Froms[Tag]> ? Tag : never }[keyof Froms]>
   }
-  readonly from: { readonly [Tag in keyof Froms]: ReadonlyArray<StateTagOfFrom<Froms[Tag]>> }
+  readonly acceptedIn: { readonly [Tag in keyof Froms]: ReadonlyArray<StateTagOfFrom<Froms[Tag]>> }
   readonly decide: <Command extends TypeUnion<Commands>, State extends TypeUnion<States> = never>(
     input: { readonly command: Command } & Now & StateInputOfCall<Name, States, StateTagOfFrom<Froms[Command["_tag"] & keyof Froms]>, State>,
   ) => DecisionOfCall<Decisions[Command["_tag"] & keyof Decisions], Events[Command["_tag"] & keyof Events]>
@@ -94,13 +94,13 @@ export declare namespace Aggregate {
   export type Event<Self extends { readonly events: AnySchemasByTag }> = TypeUnion<Self["events"]>
   export type Accepts<Self extends { readonly accepts: object }, StateTag extends keyof Self["accepts"]> =
     Self["accepts"][StateTag] extends ReadonlyArray<infer Tag> ? Tag : never
-  export type From<Self extends { readonly from: object }, CommandTag extends keyof Self["from"]> =
-    Self["from"][CommandTag] extends ReadonlyArray<infer StateTag> ? StateTag : never
+  export type AcceptedIn<Self extends { readonly acceptedIn: object }, CommandTag extends keyof Self["acceptedIn"]> =
+    Self["acceptedIn"][CommandTag] extends ReadonlyArray<infer StateTag> ? StateTag : never
 }
 
 type UntypedHandler = (input: object) => unknown
 type UntypedRecord = {
-  readonly from: ReadonlyArray<"start" | TaggedStructSchema<unknown>>
+  readonly from: ReadonlyArray<"initial" | TaggedStructSchema<unknown>>
   readonly event: TaggedStructSchema<unknown>
   readonly decide: UntypedHandler
   readonly evolve: { readonly [StateTag in string]?: UntypedHandler }
@@ -130,11 +130,11 @@ const make = <
                 TypeUnion<States>
             }
             & {
-              readonly [StateTag in Exclude<"start" | keyof States, StateTagOfFrom<Froms[Tag]>>]?:
+              readonly [StateTag in Exclude<"initial" | keyof States, StateTagOfFrom<Froms[Tag]>>]?:
                 (input: EvolveInput<Name, States, StateTag, EventTypeOf<Events[Tag & keyof Events]>>) => { readonly "this state is not in from": StateTag }
             }
             & {
-              readonly [StateTag in Exclude<keyof Evolves[Tag & keyof Evolves], "start" | keyof States | StateTagOfFrom<Froms[Tag]>>]:
+              readonly [StateTag in Exclude<keyof Evolves[Tag & keyof Evolves], "initial" | keyof States | StateTagOfFrom<Froms[Tag]>>]:
                 { readonly "no state of the aggregate has this name": StateTag }
             }
           >
@@ -159,17 +159,17 @@ const make = <
     commandTag,
     record,
     eventTag: tagOfSchema(record.event),
-    fromStateTags: record.from.map((entry) => entry === "start" ? "start" : tagOfSchema(entry)),
+    fromStateTags: record.from.map((entry) => entry === "initial" ? "initial" : tagOfSchema(entry)),
   }))
-  const accepts = Object.fromEntries(["start", ...Object.keys(definition.states)].map((stateTag) => [
+  const accepts = Object.fromEntries(["initial", ...Object.keys(definition.states)].map((stateTag) => [
     stateTag,
     recordEntries.filter(({ fromStateTags }) => fromStateTags.includes(stateTag)).map(({ commandTag }) => commandTag),
   ]))
-  const from = Object.fromEntries(recordEntries.map(({ commandTag, fromStateTags }) => [commandTag, fromStateTags]))
+  const acceptedIn = Object.fromEntries(recordEntries.map(({ commandTag, fromStateTags }) => [commandTag, fromStateTags]))
   const events = Object.fromEntries(recordEntries.map(({ eventTag, record }) => [eventTag, record.event]))
   const stateOf = (input: object) =>
     (input as { readonly [argument: string]: Tagged | undefined })[stateArgumentName] // Cast: Aggregate's signatures only let a state of States in.
-  const stateTagOf = (state: Tagged | undefined) => state === undefined ? "start" : state._tag
+  const stateTagOf = (state: Tagged | undefined) => state === undefined ? "initial" : state._tag
   const decide = (input: { readonly command: Tagged; readonly now: DateTime.Utc }) => {
     const stateTag = stateTagOf(stateOf(input))
     const recordEntry = recordEntries.find(({ commandTag }) => commandTag === input.command._tag)
@@ -187,7 +187,7 @@ const make = <
     const { _tag, ...stateFields } = state
     return evolveOfState({ event: input.event, [stateArgumentName]: stateFields })
   }
-  const untypedAggregate: object = { name, states: definition.states, commands: definition.commands, events, accepts, from, decide, evolve }
+  const untypedAggregate: object = { name, states: definition.states, commands: definition.commands, events, accepts, acceptedIn, decide, evolve }
   // Cast: Aggregate's signatures derive each result from the records; the untyped lookups return unknown.
   return untypedAggregate as Aggregate<Name, States, Commands, Froms, Events, Decisions, Evolves>
 }

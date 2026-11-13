@@ -152,7 +152,7 @@ describe("Aggregate schemas", () => {
 
   it("lists the commands each state accepts, from the from lists", () => {
     expect(Absence.accepts).toEqual({
-      start: ["DraftAbsenceCommand"],
+      initial: ["DraftAbsenceCommand"],
       DraftAbsence: ["RescheduleAbsenceCommand", "ReassignAbsenceCommand", "ActivateAbsenceCommand", "WithdrawAbsenceCommand"],
       ActiveAbsence: ["RescheduleAbsenceCommand", "ReassignAbsenceCommand", "ArchiveAbsenceCommand", "WithdrawAbsenceCommand"],
       ArchivedAbsence: [],
@@ -160,9 +160,9 @@ describe("Aggregate schemas", () => {
     })
   })
 
-  it("lists the states each command is accepted from, from the from lists", () => {
-    expect(Absence.from).toEqual({
-      DraftAbsenceCommand: ["start"],
+  it("lists the states each command is accepted in, from the from lists", () => {
+    expect(Absence.acceptedIn).toEqual({
+      DraftAbsenceCommand: ["initial"],
       RescheduleAbsenceCommand: ["DraftAbsence", "ActiveAbsence"],
       ReassignAbsenceCommand: ["DraftAbsence", "ActiveAbsence"],
       ActivateAbsenceCommand: ["DraftAbsence"],
