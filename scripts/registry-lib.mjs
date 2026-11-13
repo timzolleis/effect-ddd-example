@@ -2,8 +2,8 @@ import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import path from "node:path"
 
-const registryRef = "v0.1.0"
-const registryItems = ["aggregate", "check-rules", "date-time-utc-from-date", "match-tag", "prefixed-id", "with-optional-tag"]
+const registryRef = "v0.2.0"
+const registryItems = ["aggregate", "check-rules", "match-tag"]
 
 const root = path.resolve(import.meta.dirname, "..")
 const itemAddresses = registryItems.map((item) => `timzolleis/effect-ddd/${item}#${registryRef}`)
