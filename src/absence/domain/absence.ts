@@ -15,10 +15,10 @@ const absenceFields = {
 }
 const absenceEventFields = { absenceId: AbsenceId, organizationId: OrganizationId, actorId: UserId, occurredOn: Schema.DateTimeUtc }
 
-export const DraftAbsence     = Schema.TaggedStruct("DraftAbsence",     { ...absenceFields })
-export const ActiveAbsence    = Schema.TaggedStruct("ActiveAbsence",    { ...absenceFields, activatedAt: Schema.DateTimeUtc })
-export const ArchivedAbsence  = Schema.TaggedStruct("ArchivedAbsence",  { ...absenceFields, activatedAt: Schema.DateTimeUtc, archivedAt: Schema.DateTimeUtc })
-export const DiscardedAbsence = Schema.TaggedStruct("DiscardedAbsence", { ...absenceFields, archivedAt: Schema.DateTimeUtc })
+export class DraftAbsence     extends Schema.Opaque<DraftAbsence>()(Schema.TaggedStruct("DraftAbsence",     { ...absenceFields })) {}
+export class ActiveAbsence    extends Schema.Opaque<ActiveAbsence>()(Schema.TaggedStruct("ActiveAbsence",    { ...absenceFields, activatedAt: Schema.DateTimeUtc })) {}
+export class ArchivedAbsence  extends Schema.Opaque<ArchivedAbsence>()(Schema.TaggedStruct("ArchivedAbsence",  { ...absenceFields, activatedAt: Schema.DateTimeUtc, archivedAt: Schema.DateTimeUtc })) {}
+export class DiscardedAbsence extends Schema.Opaque<DiscardedAbsence>()(Schema.TaggedStruct("DiscardedAbsence", { ...absenceFields, archivedAt: Schema.DateTimeUtc })) {}
 
 export class DraftAbsenceCommand      extends Schema.Opaque<DraftAbsenceCommand>()(Schema.TaggedStruct("DraftAbsenceCommand",      {
   absenceId: AbsenceId, organizationId: OrganizationId, actor: AbsenceActor, assigneeId: UserId, assigneeIsOrganizationMember: Schema.Boolean,
@@ -30,25 +30,14 @@ export class ActivateAbsenceCommand   extends Schema.Opaque<ActivateAbsenceComma
 export class ArchiveAbsenceCommand    extends Schema.Opaque<ArchiveAbsenceCommand>()(Schema.TaggedStruct("ArchiveAbsenceCommand",    { actor: AbsenceActor })) {}
 export class WithdrawAbsenceCommand   extends Schema.Opaque<WithdrawAbsenceCommand>()(Schema.TaggedStruct("WithdrawAbsenceCommand",   { actor: AbsenceActor })) {}
 
-export const AbsenceDraftedEvent     = Schema.TaggedStruct("AbsenceDraftedEvent",     { ...absenceEventFields, creatorId: UserId, assigneeId: UserId, period: Period })
-export const AbsenceRescheduledEvent = Schema.TaggedStruct("AbsenceRescheduledEvent", { ...absenceEventFields, period: Period, previousPeriod: Period })
-export const AbsenceReassignedEvent  = Schema.TaggedStruct("AbsenceReassignedEvent",  { ...absenceEventFields, assigneeId: UserId, previousAssigneeId: UserId })
-export const AbsenceActivatedEvent   = Schema.TaggedStruct("AbsenceActivatedEvent",   { ...absenceEventFields })
-export const AbsenceArchivedEvent    = Schema.TaggedStruct("AbsenceArchivedEvent",    { ...absenceEventFields })
-export const AbsenceWithdrawnEvent   = Schema.TaggedStruct("AbsenceWithdrawnEvent",   { ...absenceEventFields })
+export class AbsenceDraftedEvent     extends Schema.Opaque<AbsenceDraftedEvent>()(Schema.TaggedStruct("AbsenceDraftedEvent",     { ...absenceEventFields, creatorId: UserId, assigneeId: UserId, period: Period })) {}
+export class AbsenceRescheduledEvent extends Schema.Opaque<AbsenceRescheduledEvent>()(Schema.TaggedStruct("AbsenceRescheduledEvent", { ...absenceEventFields, period: Period, previousPeriod: Period })) {}
+export class AbsenceReassignedEvent  extends Schema.Opaque<AbsenceReassignedEvent>()(Schema.TaggedStruct("AbsenceReassignedEvent",  { ...absenceEventFields, assigneeId: UserId, previousAssigneeId: UserId })) {}
+export class AbsenceActivatedEvent   extends Schema.Opaque<AbsenceActivatedEvent>()(Schema.TaggedStruct("AbsenceActivatedEvent",   { ...absenceEventFields })) {}
+export class AbsenceArchivedEvent    extends Schema.Opaque<AbsenceArchivedEvent>()(Schema.TaggedStruct("AbsenceArchivedEvent",    { ...absenceEventFields })) {}
+export class AbsenceWithdrawnEvent   extends Schema.Opaque<AbsenceWithdrawnEvent>()(Schema.TaggedStruct("AbsenceWithdrawnEvent",   { ...absenceEventFields })) {}
 
-export type DraftAbsence     = typeof DraftAbsence.Type
-export type ActiveAbsence    = typeof ActiveAbsence.Type
-export type ArchivedAbsence  = typeof ArchivedAbsence.Type
-export type DiscardedAbsence = typeof DiscardedAbsence.Type
-export type EditableAbsence  = DraftAbsence | ActiveAbsence
-
-export type AbsenceDraftedEvent     = typeof AbsenceDraftedEvent.Type
-export type AbsenceRescheduledEvent = typeof AbsenceRescheduledEvent.Type
-export type AbsenceReassignedEvent  = typeof AbsenceReassignedEvent.Type
-export type AbsenceActivatedEvent   = typeof AbsenceActivatedEvent.Type
-export type AbsenceArchivedEvent    = typeof AbsenceArchivedEvent.Type
-export type AbsenceWithdrawnEvent   = typeof AbsenceWithdrawnEvent.Type
+export type EditableAbsence = DraftAbsence | ActiveAbsence
 
 export const Absence = Aggregate.make("Absence", {
   id: AbsenceId,
