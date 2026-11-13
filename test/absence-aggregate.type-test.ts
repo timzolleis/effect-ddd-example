@@ -273,6 +273,16 @@ expectTrue<Equal<Aggregate.Accepts<typeof Absence, "DraftAbsence">,
 expectTrue<Equal<Aggregate.Accepts<typeof Absence, "ActiveAbsence">,
   "RescheduleAbsenceCommand" | "ReassignAbsenceCommand" | "ArchiveAbsenceCommand" | "WithdrawAbsenceCommand">>()
 expectTrue<Equal<Aggregate.Accepts<typeof Absence, "ArchivedAbsence">, never>>()
+expectTrue<Equal<typeof Absence.accepts.ActiveAbsence,
+  ReadonlyArray<"RescheduleAbsenceCommand" | "ReassignAbsenceCommand" | "ArchiveAbsenceCommand" | "WithdrawAbsenceCommand">>>()
+
+// Which states accept a command, the same from lists read the other way.
+expectTrue<Equal<Aggregate.From<typeof Absence, "DraftAbsenceCommand">, "start">>()
+expectTrue<Equal<Aggregate.From<typeof Absence, "RescheduleAbsenceCommand">, "DraftAbsence" | "ActiveAbsence">>()
+expectTrue<Equal<Aggregate.From<typeof Absence, "ActivateAbsenceCommand">, "DraftAbsence">>()
+expectTrue<Equal<Aggregate.From<typeof Absence, "ArchiveAbsenceCommand">, "ActiveAbsence">>()
+expectTrue<Equal<typeof Absence.from.RescheduleAbsenceCommand, ReadonlyArray<"DraftAbsence" | "ActiveAbsence">>>()
+expectTrue<Equal<keyof typeof Absence.from, Aggregate.Command<typeof Absence>["_tag"]>>()
 
 // Terminal states need no record; a state that no evolve returns is a compile error on states.
 Aggregate.make("Absence", {

@@ -159,4 +159,15 @@ describe("Aggregate schemas", () => {
       DiscardedAbsence: [],
     })
   })
+
+  it("lists the states each command is accepted from, from the from lists", () => {
+    expect(Absence.from).toEqual({
+      DraftAbsenceCommand: ["start"],
+      RescheduleAbsenceCommand: ["DraftAbsence", "ActiveAbsence"],
+      ReassignAbsenceCommand: ["DraftAbsence", "ActiveAbsence"],
+      ActivateAbsenceCommand: ["DraftAbsence"],
+      ArchiveAbsenceCommand: ["ActiveAbsence"],
+      WithdrawAbsenceCommand: ["DraftAbsence", "ActiveAbsence"],
+    })
+  })
 })
