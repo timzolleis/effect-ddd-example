@@ -20,15 +20,15 @@ export const ActiveAbsence    = Schema.TaggedStruct("ActiveAbsence",    { ...abs
 export const ArchivedAbsence  = Schema.TaggedStruct("ArchivedAbsence",  { ...absenceFields, activatedAt: Schema.DateTimeUtc, archivedAt: Schema.DateTimeUtc })
 export const DiscardedAbsence = Schema.TaggedStruct("DiscardedAbsence", { ...absenceFields, archivedAt: Schema.DateTimeUtc })
 
-export const DraftAbsenceCommand      = Schema.TaggedStruct("DraftAbsenceCommand",      {
+export class DraftAbsenceCommand      extends Schema.Opaque<DraftAbsenceCommand>()(Schema.TaggedStruct("DraftAbsenceCommand",      {
   absenceId: AbsenceId, organizationId: OrganizationId, actor: AbsenceActor, assigneeId: UserId, assigneeIsOrganizationMember: Schema.Boolean,
   from: Schema.DateTimeUtc, to: Schema.DateTimeUtc,
-})
-export const RescheduleAbsenceCommand = Schema.TaggedStruct("RescheduleAbsenceCommand", { actor: AbsenceActor, from: Schema.DateTimeUtc, to: Schema.DateTimeUtc })
-export const ReassignAbsenceCommand   = Schema.TaggedStruct("ReassignAbsenceCommand",   { actor: AbsenceActor, assigneeId: UserId, assigneeIsOrganizationMember: Schema.Boolean })
-export const ActivateAbsenceCommand   = Schema.TaggedStruct("ActivateAbsenceCommand",   { actor: AbsenceActor })
-export const ArchiveAbsenceCommand    = Schema.TaggedStruct("ArchiveAbsenceCommand",    { actor: AbsenceActor })
-export const WithdrawAbsenceCommand   = Schema.TaggedStruct("WithdrawAbsenceCommand",   { actor: AbsenceActor })
+})) {}
+export class RescheduleAbsenceCommand extends Schema.Opaque<RescheduleAbsenceCommand>()(Schema.TaggedStruct("RescheduleAbsenceCommand", { actor: AbsenceActor, from: Schema.DateTimeUtc, to: Schema.DateTimeUtc })) {}
+export class ReassignAbsenceCommand   extends Schema.Opaque<ReassignAbsenceCommand>()(Schema.TaggedStruct("ReassignAbsenceCommand",   { actor: AbsenceActor, assigneeId: UserId, assigneeIsOrganizationMember: Schema.Boolean })) {}
+export class ActivateAbsenceCommand   extends Schema.Opaque<ActivateAbsenceCommand>()(Schema.TaggedStruct("ActivateAbsenceCommand",   { actor: AbsenceActor })) {}
+export class ArchiveAbsenceCommand    extends Schema.Opaque<ArchiveAbsenceCommand>()(Schema.TaggedStruct("ArchiveAbsenceCommand",    { actor: AbsenceActor })) {}
+export class WithdrawAbsenceCommand   extends Schema.Opaque<WithdrawAbsenceCommand>()(Schema.TaggedStruct("WithdrawAbsenceCommand",   { actor: AbsenceActor })) {}
 
 export const AbsenceDraftedEvent     = Schema.TaggedStruct("AbsenceDraftedEvent",     { ...absenceEventFields, creatorId: UserId, assigneeId: UserId, period: Period })
 export const AbsenceRescheduledEvent = Schema.TaggedStruct("AbsenceRescheduledEvent", { ...absenceEventFields, period: Period, previousPeriod: Period })

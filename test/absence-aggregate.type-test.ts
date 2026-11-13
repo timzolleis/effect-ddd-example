@@ -19,12 +19,6 @@ type Equal<Left, Right> = (<T>() => T extends Left ? 1 : 2) extends (<T>() => T 
 const expectTrue = <_Check extends true>() => undefined
 
 type AbsenceState = Aggregate.State<typeof Absence>
-type DraftAbsenceCommand = typeof DraftAbsenceCommand.Type
-type RescheduleAbsenceCommand = typeof RescheduleAbsenceCommand.Type
-type ReassignAbsenceCommand = typeof ReassignAbsenceCommand.Type
-type ActivateAbsenceCommand = typeof ActivateAbsenceCommand.Type
-type ArchiveAbsenceCommand = typeof ArchiveAbsenceCommand.Type
-type WithdrawAbsenceCommand = typeof WithdrawAbsenceCommand.Type
 
 declare const now: DateTime.Utc
 declare const draftAbsence: DraftAbsence
