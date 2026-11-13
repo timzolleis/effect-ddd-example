@@ -60,9 +60,6 @@ type EveryStateReachable<States, Evolves> = unknown extends NextStates<Evolves> 
 // any: while a broken definition drops the inferred decides, calls of the other commands keep compiling (the error stays on the definition).
 type DecisionOfCall<Decision, EventSchema> = unknown extends Decision ? Result.Result<EventTypeOf<EventSchema>, any> : Decision
 type CommandTagDeciding<Events, EventTag> = { [Tag in keyof Events]: EventTypeOf<Events[Tag]> extends { readonly _tag: EventTag } ? Tag : never }[keyof Events]
-type StateInputOfCall<Name extends string, States extends AnySchemasByTag, AcceptingStateTags, State> = [AcceptingStateTags] extends ["initial"]
-  ? {}
-  : StateArgument<Name, [State] extends [States[AcceptingStateTags & keyof States]["Type"]] ? State : States[AcceptingStateTags & keyof States]["Type"]>
 type StateTagOfCall<State extends Tagged> = [State] extends [never] ? "initial" : State["_tag"]
 type CommandTagsAcceptedIn<Froms, StateTag> = { [Tag in keyof Froms]: [StateTag] extends [StateTagOfFrom<Froms[Tag]>] ? Tag : never }[keyof Froms]
 type CommandAcceptedIn<Commands extends AnySchemasByTag, Froms, State extends Tagged> =
@@ -86,15 +83,31 @@ type CommandInputOfDecide<Commands extends AnySchemasByTag, States extends AnySc
         readonly "which accepts": CommandAcceptedIn<Commands, Froms, State>["_tag"]
       }
     })
-type StateOfDecide<States extends AnySchemasByTag, Froms, State extends Tagged, Command extends Tagged> =
+type StateOfCall<States extends AnySchemasByTag, Froms, State extends Tagged, Command extends Tagged> =
   IsAny<State> extends true ? StateAccepting<States, Froms, Command>
   : IsAny<Command> extends true ? State
   : [Command] extends [never] ? State
   : State | StateAccepting<States, Froms, Command>
-type StateInputOfDecide<Name extends string, States extends AnySchemasByTag, Froms, State extends Tagged, Command extends Tagged> =
+type StateInputOfCall<Name extends string, States extends AnySchemasByTag, Froms, State extends Tagged, Command extends Tagged> =
   [State] extends [never] ? "initial" extends StateTagsAccepting<States, Froms, Command["_tag"]> ? {}
     : { readonly [Key in Uncapitalize<Name>]: StateAccepting<States, Froms, Command> }
-  : { readonly [Key in Uncapitalize<Name>]: StateOfDecide<States, Froms, State, Command> }
+  : { readonly [Key in Uncapitalize<Name>]: StateOfCall<States, Froms, State, Command> }
+type CommandOfEvent<Commands extends AnySchemasByTag, Events, Event extends Tagged> = CommandTypeOf<Commands, CommandTagDeciding<Events, Event["_tag"]>>
+type EventAcceptedIn<Commands extends AnySchemasByTag, Froms, Events, State extends Tagged> =
+  EventTypeOf<Events[CommandAcceptedIn<Commands, Froms, State>["_tag"] & keyof Events]>
+type EventInputOfEvolve<Commands extends AnySchemasByTag, States extends AnySchemasByTag, Froms, Events, State extends Tagged, Event extends Tagged> =
+  & { readonly event: Event | EventAcceptedIn<Commands, Froms, Events, State> }
+  & (IsAny<Event> extends true ? {}
+    : [State] extends [never] ? {}
+    : [CommandOfEvent<Commands, Events, Event>] extends [CommandAcceptedIn<Commands, Froms, State>] ? {}
+    : {
+      readonly event: {
+        readonly event: Event["_tag"]
+        readonly "applies to": StateTagsAccepting<States, Froms, CommandOfEvent<Commands, Events, Event>["_tag"]>
+        readonly "not to": State["_tag"]
+        readonly "which takes": (EventAcceptedIn<Commands, Froms, Events, State> & Tagged)["_tag"]
+      }
+    })
 // any: same as DecisionOfCall, for the evolves.
 type NextStateOfCall<Evolve, StateTag> = unknown extends Evolve ? any : NextStateOfEvolve<Evolve[StateTag & keyof Evolve]>
 type EventSchemasByTag<Events> = {
@@ -114,11 +127,12 @@ export type Aggregate<Name extends string, States extends AnySchemasByTag, Comma
     input:
       & CommandInputOfDecide<Commands, States, Froms, State, Command>
       & Now
-      & StateInputOfDecide<Name, States, Froms, State, Command>,
+      & StateInputOfCall<Name, States, Froms, State, Command>,
   ) => DecisionOfCall<Decisions[Command["_tag"] & keyof Decisions], Events[Command["_tag"] & keyof Events]>
-  readonly evolve: <Event extends EventTypeOf<Events[keyof Events]> & Tagged, State extends TypeUnion<States> = never>(
-    input: { readonly event: Event }
-      & StateInputOfCall<Name, States, StateTagOfFrom<Froms[CommandTagDeciding<Events, Event["_tag"]> & keyof Froms]>, State>,
+  readonly evolve: <Event extends EventTypeOf<Events[keyof Events]> & Tagged = never, State extends TypeUnion<States> = never>(
+    input:
+      & EventInputOfEvolve<Commands, States, Froms, Events, State, Event>
+      & StateInputOfCall<Name, States, Froms, State, CommandOfEvent<Commands, Events, Event>>,
   ) => NextStateOfCall<Evolves[CommandTagDeciding<Events, Event["_tag"]> & keyof Evolves], StateTagOfCall<State>>
 }
 

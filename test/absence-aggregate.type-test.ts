@@ -254,10 +254,48 @@ expectTrue<Equal<typeof activeAbsenceAfterReschedule, ActiveAbsence>>()
 const editableAbsenceAfterReschedule = Absence.evolve({ absence: editableAbsence, event: null! as AbsenceRescheduledEvent })
 expectTrue<Equal<typeof editableAbsenceAfterReschedule, DraftAbsence | ActiveAbsence>>()
 Absence.evolve({
-  // @ts-expect-error a DraftAbsence has no evolve for AbsenceArchivedEvent
   absence: draftAbsence,
+  // @ts-expect-error a DraftAbsence has no evolve for AbsenceArchivedEvent
   event: absenceArchivedEvent,
 })
+Absence.evolve({
+  absence: editableAbsence,
+  // @ts-expect-error the union holds a state that has no evolve for AbsenceArchivedEvent
+  event: absenceArchivedEvent,
+})
+declare const archivedOrRescheduledEvent: AbsenceArchivedEvent | AbsenceRescheduledEvent
+Absence.evolve({
+  absence: draftAbsence,
+  // @ts-expect-error a DraftAbsence has an evolve for AbsenceRescheduledEvent but not for AbsenceArchivedEvent
+  event: archivedOrRescheduledEvent,
+})
+// @ts-expect-error archived needs an absence
+Absence.evolve({ event: absenceArchivedEvent })
+Absence.evolve({
+  absence: draftAbsence,
+  // @ts-expect-error drafted starts the lifecycle, so it takes no absence
+  event: absenceDraftedEvent,
+})
+const activeAbsenceAfterArchivedOrRescheduled = Absence.evolve({ absence: activeAbsence, event: archivedOrRescheduledEvent })
+expectTrue<Equal<typeof activeAbsenceAfterArchivedOrRescheduled, ArchivedAbsence | ActiveAbsence>>()
+
+// Either side gives the other's candidates: the state the events that can happen to it, the event the states it applies to.
+type EvolveInput<Event extends AbsenceEvent, State extends AbsenceState> = Parameters<typeof Absence.evolve<Event, State>>[0]
+expectTrue<Equal<EvolveInput<never, never>["event"], AbsenceDraftedEvent>>()
+expectTrue<Equal<"absence" extends keyof EvolveInput<AbsenceDraftedEvent, never> ? true : false, false>>()
+expectTrue<Equal<EvolveInput<never, ActiveAbsence>["event"],
+  AbsenceArchivedEvent | AbsenceReassignedEvent | AbsenceRescheduledEvent | AbsenceWithdrawnEvent>>()
+expectTrue<Equal<EvolveInput<never, EditableAbsence>["event"], AbsenceReassignedEvent | AbsenceRescheduledEvent | AbsenceWithdrawnEvent>>()
+expectTrue<Equal<EvolveInput<AbsenceArchivedEvent, never>["absence"], ActiveAbsence>>()
+expectTrue<Equal<EvolveInput<AbsenceWithdrawnEvent, ActiveAbsence>["absence"], ActiveAbsence | DraftAbsence>>()
+expectTrue<Equal<EvolveInput<AbsenceRescheduledEvent | AbsenceActivatedEvent, never>["absence"], DraftAbsence>>()
+// A wrong pair is one error on event, naming the event, the states it applies to, the given state and the events that state takes.
+type WrongPairEvent = EvolveInput<AbsenceArchivedEvent, DraftAbsence>["event"]
+expectTrue<Equal<WrongPairEvent["event"], "AbsenceArchivedEvent">>()
+expectTrue<Equal<WrongPairEvent["applies to"], "ActiveAbsence">>()
+expectTrue<Equal<WrongPairEvent["not to"], "DraftAbsence">>()
+expectTrue<Equal<WrongPairEvent["which takes"],
+  "AbsenceActivatedEvent" | "AbsenceReassignedEvent" | "AbsenceRescheduledEvent" | "AbsenceWithdrawnEvent">>()
 
 // A decide that runs no rule returns the bare event.
 const WithoutRule = Aggregate.make("Absence", {

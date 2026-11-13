@@ -129,8 +129,8 @@ describe("Absence aggregate: decide, then evolve", () => {
       absenceId: draftAbsenceOfAlice.absenceId, organizationId, actorId: alice, occurredOn: afterPeriod,
     })
     expect(() => Absence.evolve({
-      // @ts-expect-error a DraftAbsence has no evolve for AbsenceArchivedEvent
       absence: draftAbsenceOfAlice,
+      // @ts-expect-error a DraftAbsence has no evolve for AbsenceArchivedEvent
       event,
     })).toThrow("Absence: DraftAbsence has no evolve for AbsenceArchivedEvent")
   })
