@@ -67,7 +67,7 @@ layer(TestLayer)("absence HTTP", (it) => {
     yield* TestClock.setTime(DateTime.toEpochMillis(at("2026-03-04T00:00:00Z")))
     const archived = yield* client.alice.archiveAbsence({ params: absenceParams })
     expect(archived).toMatchObject({ status: "archived", activatedAt: activated.activatedAt, archivedAt: at("2026-03-04T00:00:00Z") })
-    expect(yield* errorTag(client.alice.deleteAbsence({ params: absenceParams }))).toBe("AbsenceAlreadyArchivedHttpError")
+    expect(yield* errorTag(client.alice.withdrawAbsence({ params: absenceParams }))).toBe("AbsenceAlreadyArchivedHttpError")
   }))
 
   it.effect("withdraw: a draft is discarded and stays hidden from others", () => Effect.gen(function* () {
@@ -75,14 +75,14 @@ layer(TestLayer)("absence HTTP", (it) => {
     host.permissions.set(bob, new Set([`${organizationId}:absences:read`]))
     const draft = yield* client.alice.createAbsence({ params, payload: { assigneeId: alice, ...period } })
     const absenceParams = { organizationId, absenceId: draft.absenceId }
-    yield* client.alice.deleteAbsence({ params: absenceParams })
+    yield* client.alice.withdrawAbsence({ params: absenceParams })
 
     expect(yield* client.alice.getAbsenceById({ params: absenceParams }))
       .toMatchObject({ status: "discarded", activatedAt: null, archivedAt: at("2026-02-01T10:00:00Z") })
     // absences:read sees others' archived absences, not their discarded drafts
     expect(yield* errorTag(client.bob.getAbsenceById({ params: absenceParams }))).toBe("AbsenceNotFoundHttpError")
     expect(yield* client.bob.listAbsences({ params, query: {} })).toEqual([])
-    expect(yield* errorTag(client.alice.deleteAbsence({ params: absenceParams }))).toBe("AbsenceAlreadyArchivedHttpError")
+    expect(yield* errorTag(client.alice.withdrawAbsence({ params: absenceParams }))).toBe("AbsenceAlreadyArchivedHttpError")
   }))
 
   it.effect("permissions: absences:delete withdraws someone else's active absence, not their draft", () => Effect.gen(function* () {
@@ -92,11 +92,11 @@ layer(TestLayer)("absence HTTP", (it) => {
     const active = yield* client.alice.createAbsence({ params, payload: { assigneeId: alice, ...period } })
     yield* client.alice.activateAbsence({ params: { organizationId, absenceId: active.absenceId } })
 
-    // the manager can't see alice's draft (no absences:read), so withdraw is 403 from the policy, read-back never happens
-    expect(yield* errorTag(client.manager.deleteAbsence({ params: { organizationId, absenceId: draft.absenceId } })))
+    // the manager can't see alice's draft (no absences:read), so withdraw is 403 from the rule, read-back never happens
+    expect(yield* errorTag(client.manager.withdrawAbsence({ params: { organizationId, absenceId: draft.absenceId } })))
       .toBe("NotAllowedToDeleteAbsenceHttpError")
     const activated = yield* client.alice.getAbsenceById({ params: { organizationId, absenceId: active.absenceId } })
-    yield* client.manager.deleteAbsence({ params: { organizationId, absenceId: active.absenceId } })
+    yield* client.manager.withdrawAbsence({ params: { organizationId, absenceId: active.absenceId } })
     const withdrawn = yield* client.alice.getAbsenceById({ params: { organizationId, absenceId: active.absenceId } })
     expect(withdrawn).toMatchObject({ status: "archived", activatedAt: activated.activatedAt, archivedAt: at("2026-02-01T10:00:00Z") })
     expect(withdrawn.activatedAt).not.toBeNull()

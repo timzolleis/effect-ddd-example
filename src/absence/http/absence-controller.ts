@@ -71,7 +71,7 @@ export const AbsenceController = HttpApiBuilder.group(Api, "absences", Effect.fn
       return yield* absenceViews.getAbsenceById({ organizationId, visibility, absenceId: params.absenceId })
     }).pipe(Effect.mapError(absenceHttpErrorFromAbsenceError)),
 
-    deleteAbsence: ({ params }) => Effect.gen(function* () {
+    withdrawAbsence: ({ params }) => Effect.gen(function* () {
       const { organizationId, actor } = yield* loadAbsenceActorAndVisibility
       yield* withdrawAbsenceService.withdrawAbsence({ organizationId, actor, absenceId: params.absenceId })
     }).pipe(Effect.mapError(absenceHttpErrorFromAbsenceError)),
