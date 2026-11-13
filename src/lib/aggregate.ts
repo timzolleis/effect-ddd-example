@@ -66,8 +66,34 @@ type StateInputOfCall<Name extends string, States extends AnySchemasByTag, Accep
 type StateTagOfCall<State extends Tagged> = [State] extends [never] ? "initial" : State["_tag"]
 type CommandTagsAcceptedIn<Froms, StateTag> = { [Tag in keyof Froms]: [StateTag] extends [StateTagOfFrom<Froms[Tag]>] ? Tag : never }[keyof Froms]
 type CommandAcceptedIn<Commands extends AnySchemasByTag, Froms, State extends Tagged> =
-  CommandTypeOf<Commands, CommandTagsAcceptedIn<Froms, StateTagOfCall<State>>>
-type StateInputOfDecide<Name extends string, State> = [State] extends [never] ? {} : StateArgument<Name, State>
+  [State] extends [never] ? TypeUnion<Commands> : CommandTypeOf<Commands, CommandTagsAcceptedIn<Froms, State["_tag"]>>
+type IsAny<Type> = 0 extends 1 & Type ? true : false
+type StateTagsAccepting<States, Froms, CommandTag, StateTag = "initial" | keyof States> = StateTag extends unknown
+  ? [CommandTag] extends [CommandTagsAcceptedIn<Froms, StateTag>] ? StateTag : never
+  : never
+type StateAccepting<States extends AnySchemasByTag, Froms, Command extends Tagged> =
+  States[StateTagsAccepting<States, Froms, Command["_tag"]> & keyof States]["Type"]
+type CommandInputOfDecide<Commands extends AnySchemasByTag, States extends AnySchemasByTag, Froms, State extends Tagged, Command extends Tagged> =
+  & { readonly command: Command | CommandAcceptedIn<Commands, Froms, State> }
+  & (IsAny<Command> extends true ? {}
+    : [Command] extends [CommandAcceptedIn<Commands, Froms, State>] ? {}
+    : {
+      readonly command: {
+        readonly command: Command["_tag"]
+        readonly "is accepted in": StateTagsAccepting<States, Froms, Command["_tag"]>
+        readonly "not in": State["_tag"]
+        readonly "which accepts": CommandAcceptedIn<Commands, Froms, State>["_tag"]
+      }
+    })
+type StateOfDecide<States extends AnySchemasByTag, Froms, State extends Tagged, Command extends Tagged> =
+  IsAny<State> extends true ? StateAccepting<States, Froms, Command>
+  : IsAny<Command> extends true ? State
+  : [Command] extends [never] ? State
+  : State | StateAccepting<States, Froms, Command>
+type StateInputOfDecide<Name extends string, States extends AnySchemasByTag, Froms, State extends Tagged, Command extends Tagged> =
+  [State] extends [never] ? "initial" extends StateTagsAccepting<States, Froms, Command["_tag"]> ? {}
+    : { readonly [Key in Uncapitalize<Name>]: StateAccepting<States, Froms, Command> }
+  : { readonly [Key in Uncapitalize<Name>]: StateOfDecide<States, Froms, State, Command> }
 // any: same as DecisionOfCall, for the evolves.
 type NextStateOfCall<Evolve, StateTag> = unknown extends Evolve ? any : NextStateOfEvolve<Evolve[StateTag & keyof Evolve]>
 type EventSchemasByTag<Events> = {
@@ -83,8 +109,11 @@ export type Aggregate<Name extends string, States extends AnySchemasByTag, Comma
     readonly [StateTag in "initial" | keyof States]: ReadonlyArray<CommandTagsAcceptedIn<Froms, StateTag>>
   }
   readonly acceptedIn: { readonly [Tag in keyof Froms]: ReadonlyArray<StateTagOfFrom<Froms[Tag]>> }
-  readonly decide: <State extends TypeUnion<States> = never, Command extends CommandAcceptedIn<Commands, Froms, State> = never>(
-    input: { readonly command: Command | CommandAcceptedIn<Commands, Froms, State> } & Now & StateInputOfDecide<Name, State>,
+  readonly decide: <State extends TypeUnion<States> = never, Command extends TypeUnion<Commands> = never>(
+    input:
+      & CommandInputOfDecide<Commands, States, Froms, State, Command>
+      & Now
+      & StateInputOfDecide<Name, States, Froms, State, Command>,
   ) => DecisionOfCall<Decisions[Command["_tag"] & keyof Decisions], Events[Command["_tag"] & keyof Events]>
   readonly evolve: <Event extends EventTypeOf<Events[keyof Events]> & Tagged, State extends TypeUnion<States> = never>(
     input: { readonly event: Event }

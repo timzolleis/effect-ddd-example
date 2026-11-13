@@ -200,6 +200,23 @@ Absence.decide({
   command: archiveOrRescheduleCommand, now,
 })
 
+// Either side gives the other's candidates: the state the commands it accepts, the command the states it is accepted in.
+type DecideInput<State extends AbsenceState, Command extends Aggregate.Command<typeof Absence>> =
+  Parameters<typeof Absence.decide<State, Command>>[0]
+expectTrue<Equal<DecideInput<ActiveAbsence, never>["command"],
+  ArchiveAbsenceCommand | ReassignAbsenceCommand | RescheduleAbsenceCommand | WithdrawAbsenceCommand>>()
+expectTrue<Equal<DecideInput<never, ArchiveAbsenceCommand>["absence"], ActiveAbsence>>()
+expectTrue<Equal<DecideInput<ActiveAbsence, WithdrawAbsenceCommand>["absence"], ActiveAbsence | DraftAbsence>>()
+expectTrue<Equal<DecideInput<never, RescheduleAbsenceCommand | ActivateAbsenceCommand>["absence"], DraftAbsence>>()
+expectTrue<Equal<"absence" extends keyof DecideInput<never, DraftAbsenceCommand> ? true : false, false>>()
+// A wrong pair is one error on command, naming the command, the states it is accepted in, the given state and what that state accepts.
+type WrongPairCommand = DecideInput<DraftAbsence, ArchiveAbsenceCommand>["command"]
+expectTrue<Equal<WrongPairCommand["command"], "ArchiveAbsenceCommand">>()
+expectTrue<Equal<WrongPairCommand["is accepted in"], "ActiveAbsence">>()
+expectTrue<Equal<WrongPairCommand["not in"], "DraftAbsence">>()
+expectTrue<Equal<WrongPairCommand["which accepts"],
+  "ActivateAbsenceCommand" | "ReassignAbsenceCommand" | "RescheduleAbsenceCommand" | "WithdrawAbsenceCommand">>()
+
 // Per-command result type: the event of the record; the errors are exactly those of the rules decide runs plus its own.
 const draftDecision = Absence.decide({ command: draftAbsenceCommand, now })
 expectTrue<Equal<typeof draftDecision, Result.Result<
