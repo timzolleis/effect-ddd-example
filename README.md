@@ -6,7 +6,7 @@ Built with that skill.
 
 ```sh
 npm install
-npm run verify       # prisma generate, tsc, Postgres on :55432 (docker compose), db push, vitest, SPEC.md excerpt check
+npm run verify       # prisma generate, tsc, Postgres on :55432 (docker compose), db push, vitest, SPEC.md excerpt check, check:lib
 npm run check:skill  # every ts/prisma block in the skill is an excerpt of this code (skill at $EFFECT_DDD_SKILL, default ~/code/effect-ddd/skills/effect-ddd)
 npm run check:lib    # src/lib helpers equal timzolleis/effect-ddd at the pinned ref (scripts/registry-lib.mjs); npm run lib:install reinstalls them
 ```
