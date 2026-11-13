@@ -1,10 +1,8 @@
 import { describe, expect, layer } from "@effect/vitest"
 import { Cause, DateTime, Effect, Exit, Layer, Match } from "effect"
 import { AbsenceStatus } from "~prisma/client"
-import { AbsenceArchivedEvent } from "../src/absence/domain/absence-event.ts"
 import { AbsenceRepository, type FindAbsenceByIdInput } from "../src/absence/domain/absence-repository.ts"
-import { Absence as AbsenceAggregate } from "../src/absence/domain/absence-aggregate.ts"
-import type { Absence, ActiveAbsence } from "../src/absence/domain/absence.ts"
+import { Absence, AbsenceArchivedEvent, type ActiveAbsence } from "../src/absence/domain/absence.ts"
 import { PrismaAbsenceRepository } from "../src/absence/infrastructure/prisma-absence-repository.ts"
 import {
   alice, at, HostLayer, makeActiveAbsence, makeArchivedAbsence, makeDiscardedAbsence, makeDraftAbsence, organizationId, otherOrganizationId,
@@ -94,7 +92,7 @@ layer(TestLayer)("PrismaAbsenceRepository", (it) => {
       const before = { ...absence, updatedAt: at("2026-02-01T10:00:00Z") }
       const event = archivedEvent(absence)
       const absenceRepository = yield* AbsenceRepository
-      expect(yield* outcome(absenceRepository.updateAbsence({ before, after: AbsenceAggregate.evolve({ absence: before, event }) }))).toBe("AbsenceChangedConcurrentlyError")
+      expect(yield* outcome(absenceRepository.updateAbsence({ before, after: Absence.evolve({ absence: before, event }) }))).toBe("AbsenceChangedConcurrentlyError")
       const row = yield* Effect.promise(() => prismaClient.absence.findUniqueOrThrow({ where: { id: absence.absenceId } }))
       expect(row.status).toBe("active")
     }))

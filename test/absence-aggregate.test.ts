@@ -1,24 +1,14 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Result, Schema } from "effect"
-import { AbsenceActor } from "../src/absence/domain/absence-actor.ts"
+import { Result } from "effect"
+import { generateAbsenceId } from "../src/absence/domain/absence-id.ts"
 import {
-  Absence, ActivateAbsenceCommand, ArchiveAbsenceCommand, DraftAbsenceCommand, ReassignAbsenceCommand,
-  RescheduleAbsenceCommand, WithdrawAbsenceCommand,
-} from "../src/absence/domain/absence-aggregate.ts"
-import { AbsenceArchivedEvent, AbsenceReassignedEvent } from "../src/absence/domain/absence-event.ts"
-import { AbsenceId, generateAbsenceId } from "../src/absence/domain/absence-id.ts"
-import { assigneeMustBeInOrganizationPolicy, checkPolicies, withdrawAbsencePolicies } from "../src/absence/domain/absence-policy.ts"
-import { ActiveAbsence, ArchivedAbsence, DraftAbsence } from "../src/absence/domain/absence.ts"
-import { Aggregate } from "../src/lib/aggregate.ts"
-import { UserId } from "../src/shared/ids.ts"
-import {
-  AbsenceDeletedEvent, alice, at, bob, child, DeleteAbsenceCommand, makeActiveAbsence, makeActor, makeArchivedAbsence, makeDraftAbsence,
-  organizationId,
-} from "./support.ts"
+  Absence, AbsenceArchivedEvent, ActivateAbsenceCommand, ArchiveAbsenceCommand, ArchivedAbsence, DiscardedAbsence, DraftAbsenceCommand,
+  ReassignAbsenceCommand, RescheduleAbsenceCommand, WithdrawAbsenceCommand,
+} from "../src/absence/domain/absence.ts"
+import { alice, at, bob, child, makeActiveAbsence, makeActor, makeDraftAbsence, organizationId } from "./support.ts"
 
 const draftAbsenceOfAlice = makeDraftAbsence({ creatorId: alice })
 const activeAbsenceOfAlice = makeActiveAbsence({ creatorId: alice })
-const archivedAbsenceOfAlice = makeArchivedAbsence({ creatorId: alice })
 const actorAlice = makeActor({ userId: alice })
 const actorBob = makeActor({ userId: bob })
 const withinEditWindow = at("2026-02-01T10:30:00Z")
@@ -142,31 +132,15 @@ describe("Absence aggregate: decide, then evolve", () => {
       // @ts-expect-error a DraftAbsence has no evolve for AbsenceArchivedEvent
       absence: draftAbsenceOfAlice,
       event,
-    })).toThrow("Absence: block DraftAbsence has no evolve for AbsenceArchivedEvent")
+    })).toThrow("Absence: DraftAbsence has no evolve for AbsenceArchivedEvent")
   })
 })
 
-const AbsenceWithEnds = Aggregate.make("Absence", {
-  id: AbsenceId,
-  states: { DraftAbsence, ActiveAbsence },
-  commands: { DeleteAbsenceCommand },
-  events: { AbsenceDeletedEvent },
-  ends: { AbsenceDeletedEvent },
-  handlers: {
-    start: {},
-    DraftAbsence: {},
-    ActiveAbsence: {
-      decide: {
-        DeleteAbsenceCommand: ({ absence, command, now }) => Result.gen(function* () {
-          yield* checkPolicies(withdrawAbsencePolicies, { absence, ...command, now })
-          return AbsenceDeletedEvent.make({
-            absenceId: absence.absenceId, organizationId: absence.organizationId, actorId: command.actor.userId,
-            occurredOn: now, assigneeId: absence.assigneeId, period: absence.period,
-          })
-        }),
-      },
-    },
-  },
+describe("Building the next state with .make", () => {
+  it("drops a field the next state lacks", () => {
+    const { _tag, ...activeAbsenceFields } = activeAbsenceOfAlice
+    expect(DiscardedAbsence.make({ ...activeAbsenceFields, archivedAt: afterPeriod })).not.toHaveProperty("activatedAt")
+  })
 })
 
 describe("Aggregate schemas", () => {
@@ -175,94 +149,14 @@ describe("Aggregate schemas", () => {
     expect(Absence.commands.WithdrawAbsenceCommand).toBe(WithdrawAbsenceCommand)
     expect(Absence.events.AbsenceArchivedEvent).toBe(AbsenceArchivedEvent)
   })
-})
 
-describe("Aggregate ends", () => {
-  it("decides a terminal event, and throws when it is evolved", () => {
-    const absence = activeAbsenceOfAlice
-    const event = Result.getOrThrow(AbsenceWithEnds.decide({
-      absence, command: DeleteAbsenceCommand.make({ actor: actorAlice }), now: withinEditWindow,
-    }))
-    expect(event).toMatchObject({ _tag: "AbsenceDeletedEvent", absenceId: absence.absenceId, period: absence.period })
-    // @ts-expect-error no state exists after AbsenceDeletedEvent
-    expect(() => AbsenceWithEnds.evolve({ absence, event })).toThrow("Absence: block ActiveAbsence has no evolve for AbsenceDeletedEvent")
-  })
-})
-
-const ForceReassignAbsenceCommand = Schema.TaggedStruct("ForceReassignAbsenceCommand", {
-  actor: AbsenceActor, assigneeId: UserId, assigneeIsOrganizationMember: Schema.Boolean,
-})
-
-const AbsenceWithAnyBlock = Aggregate.make("Absence", {
-  id: AbsenceId,
-  states: { DraftAbsence, ActiveAbsence, ArchivedAbsence },
-  commands: { ReassignAbsenceCommand, ForceReassignAbsenceCommand },
-  events: { AbsenceReassignedEvent },
-  handlers: {
-    start: {},
-    any: {
-      decide: {
-        ForceReassignAbsenceCommand: ({ absence, command, now }) =>
-          Result.gen(function* () {
-            yield* assigneeMustBeInOrganizationPolicy(command)
-            return AbsenceReassignedEvent.make({
-              absenceId: absence.absenceId, organizationId: absence.organizationId, actorId: command.actor.userId,
-              occurredOn: now, assigneeId: command.assigneeId, previousAssigneeId: absence.assigneeId,
-            })
-          }),
-      },
-      evolve: {
-        AbsenceReassignedEvent: ({ absence, event }) => ({ ...absence, assigneeId: event.assigneeId }),
-      },
-    },
-    DraftAbsence: {},
-    ActiveAbsence: {
-      decide: {
-        ReassignAbsenceCommand: ({ absence, command, now }) =>
-          AbsenceReassignedEvent.make({
-            absenceId: absence.absenceId, organizationId: absence.organizationId, actorId: command.actor.userId,
-            occurredOn: now, assigneeId: command.assigneeId, previousAssigneeId: absence.assigneeId,
-          }),
-      },
-    },
-    ArchivedAbsence: {},
-  },
-})
-
-describe("Aggregate any block", () => {
-  const now = at("2026-02-01T10:30:00Z")
-  const actor = makeActor({ userId: alice })
-  const archivedAbsence = archivedAbsenceOfAlice
-
-  it("decides in any when the state's block has no decide for the command, and evolves in any keeping the state", () => {
-    const event = Result.getOrThrow(AbsenceWithAnyBlock.decide({
-      absence: archivedAbsence,
-      command: ForceReassignAbsenceCommand.make({ actor, assigneeId: child, assigneeIsOrganizationMember: true }),
-      now,
-    }))
-    expect(event).toMatchObject({ _tag: "AbsenceReassignedEvent", assigneeId: child, previousAssigneeId: alice })
-    expect(AbsenceWithAnyBlock.evolve({ absence: archivedAbsence, event })).toEqual({ ...archivedAbsence, assigneeId: child })
-  })
-
-  it("refuses through the any handler's rule", () => {
-    const decision = AbsenceWithAnyBlock.decide({
-      absence: makeDraftAbsence({ creatorId: alice }),
-      command: ForceReassignAbsenceCommand.make({ actor, assigneeId: bob, assigneeIsOrganizationMember: false }),
-      now,
+  it("lists the commands each state accepts, from the from lists", () => {
+    expect(Absence.accepts).toEqual({
+      start: ["DraftAbsenceCommand"],
+      DraftAbsence: ["RescheduleAbsenceCommand", "ReassignAbsenceCommand", "ActivateAbsenceCommand", "WithdrawAbsenceCommand"],
+      ActiveAbsence: ["RescheduleAbsenceCommand", "ReassignAbsenceCommand", "ArchiveAbsenceCommand", "WithdrawAbsenceCommand"],
+      ArchivedAbsence: [],
+      DiscardedAbsence: [],
     })
-    expect(Result.getFailure(decision)).toMatchObject({ value: { _tag: "AssigneeNotInOrganizationError", assigneeId: bob } })
-  })
-
-  it("decides in the state's block and evolves in any", () => {
-    const absence = makeActiveAbsence({ creatorId: alice })
-    const event = AbsenceWithAnyBlock.decide({ absence, command: ReassignAbsenceCommand.make({ actor, assigneeId: child, assigneeIsOrganizationMember: true }), now })
-    expect(AbsenceWithAnyBlock.evolve({ absence, event })).toEqual({ ...absence, assigneeId: child })
-  })
-
-  it("throws when a command of any arrives without a state: start never falls back to any", () => {
-    const command = ForceReassignAbsenceCommand.make({ actor, assigneeId: child, assigneeIsOrganizationMember: true })
-    // @ts-expect-error any is not start: the command needs an absence
-    expect(() => AbsenceWithAnyBlock.decide({ command, now }))
-      .toThrow("Absence: block start has no decide for ForceReassignAbsenceCommand")
   })
 })

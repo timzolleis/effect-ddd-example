@@ -1,15 +1,13 @@
 import { PrismaPg } from "@prisma/adapter-pg"
-import { DateTime, Effect, Layer, Redacted, Schema } from "effect"
+import { DateTime, Effect, Layer, Redacted } from "effect"
 import { PrismaClient } from "~prisma/client"
 import { layerFromPrismaClient, PrismaService } from "~prisma/effect"
-import { AbsenceActor } from "../src/absence/domain/absence-actor.ts"
-import { Absence } from "../src/absence/domain/absence-aggregate.ts"
-import {
-  AbsenceActivatedEvent, AbsenceArchivedEvent, AbsenceDraftedEvent, AbsenceWithdrawnEvent,
-} from "../src/absence/domain/absence-event.ts"
+import type { AbsenceActor } from "../src/absence/domain/absence-actor.ts"
 import { AbsenceId, generateAbsenceId } from "../src/absence/domain/absence-id.ts"
-import type { ActiveAbsence, ArchivedAbsence, DiscardedAbsence, DraftAbsence } from "../src/absence/domain/absence.ts"
-import { Period } from "../src/absence/domain/period.ts"
+import {
+  Absence, AbsenceActivatedEvent, AbsenceArchivedEvent, AbsenceDraftedEvent, AbsenceWithdrawnEvent, type ActiveAbsence, type ArchivedAbsence,
+  type DiscardedAbsence, type DraftAbsence,
+} from "../src/absence/domain/absence.ts"
 import { AuthMiddleware, NotAuthenticatedHttpError } from "../src/lib/auth-middleware.ts"
 import { CurrentUser } from "../src/shared/current-user.ts"
 import { DomainEvents, type DomainEvent } from "../src/shared/domain-events.ts"
@@ -61,14 +59,6 @@ export const makeDiscardedAbsence = (input: AbsenceFixtureInput = {}): Discarded
   const drafted = makeDraftedEvent(input)
   return Absence.evolve({ absence: Absence.evolve({ event: drafted }), event: makeWithdrawnEvent(drafted, at("2026-02-01T10:30:00Z")) })
 }
-
-// Test-only: the absence aggregate archives instead of deleting, so ends is proven on these.
-export const DeleteAbsenceCommand = Schema.TaggedStruct("DeleteAbsenceCommand", { actor: AbsenceActor })
-export type DeleteAbsenceCommand = typeof DeleteAbsenceCommand.Type
-export const AbsenceDeletedEvent = Schema.TaggedStruct("AbsenceDeletedEvent", {
-  absenceId: AbsenceId, organizationId: OrganizationId, actorId: UserId, occurredOn: Schema.DateTimeUtc, assigneeId: UserId, period: Period,
-})
-export type AbsenceDeletedEvent = typeof AbsenceDeletedEvent.Type
 
 export const unknownAbsenceId = AbsenceId.make("abs_zzzzzzzzzzzzzzzzzzzzzzzz")
 

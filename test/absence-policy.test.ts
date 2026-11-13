@@ -1,11 +1,11 @@
 import { describe, expect, it } from "@effect/vitest"
 import { DateTime, Result } from "effect"
 import {
-  absenceEditableUntil, cannotArchiveWhileOngoingPolicy, checkPolicies, createAbsencePolicies,
-  editOnlyInFirstHourPolicy, onlyCreatorCanActivatePolicy, onlyCreatorOrPermittedCanDeletePolicy, onlyCreatorOrPermittedCanEditPolicy,
+  absenceEditableUntil, cannotArchiveWhileOngoingPolicy, editOnlyInFirstHourPolicy, onlyCreatorCanActivatePolicy,
+  onlyCreatorOrPermittedCanDeletePolicy, onlyCreatorOrPermittedCanEditPolicy,
 } from "../src/absence/domain/absence-policy.ts"
 import { generateAbsenceId } from "../src/absence/domain/absence-id.ts"
-import { reassignAbsence } from "../src/absence/domain/absence.ts"
+import { Absence, DraftAbsenceCommand, ReassignAbsenceCommand } from "../src/absence/domain/absence.ts"
 import { createPeriod } from "../src/absence/domain/period.ts"
 import { alice, at, bob, child, makeActiveAbsence, makeActor, makeDraftAbsence, organizationId } from "./support.ts"
 
@@ -47,9 +47,12 @@ describe("assignee policies: membership × self / related / unrelated × mayAssi
   ]
   it.each(cases)("$assigneeId, member $member, mayAssignAnyone $mayAssignAnyone → $expected", ({ assigneeId, member, mayAssignAnyone, expected }) => {
     const actor = makeActor({ userId: alice, mayAssignAnyone, relatedUserIds: new Set([child]) })
-    const result = checkPolicies(createAbsencePolicies, {
-      absenceId: generateAbsenceId(), organizationId, actor, assigneeId, assigneeIsOrganizationMember: member,
-      from: at("2026-03-01T00:00:00Z"), to: at("2026-03-02T00:00:00Z"), now: at("2026-02-01T10:00:00Z"),
+    const result = Absence.decide({
+      command: DraftAbsenceCommand.make({
+        absenceId: generateAbsenceId(), organizationId, actor, assigneeId, assigneeIsOrganizationMember: member,
+        from: at("2026-03-01T00:00:00Z"), to: at("2026-03-02T00:00:00Z"),
+      }),
+      now: at("2026-02-01T10:00:00Z"),
     })
     expect(failureTag(result)).toBe(expected)
   })
@@ -67,7 +70,7 @@ describe("time policies at the boundary", () => {
 
   it("ongoing: from <= now < to", () => {
     const absence = makeActiveAbsence()
-    const archiveAt = (now: DateTime.Utc) => failureTag(cannotArchiveWhileOngoingPolicy({ absence, actor: makeActor({ userId: alice }), now }))
+    const archiveAt = (now: DateTime.Utc) => failureTag(cannotArchiveWhileOngoingPolicy({ absence, now }))
     expect(archiveAt(DateTime.subtract(absence.period.from, { milliseconds: 1 }))).toBe("ok")
     expect(archiveAt(absence.period.from)).toBe("AbsenceOngoingError")
     expect(archiveAt(DateTime.subtract(absence.period.to, { milliseconds: 1 }))).toBe("AbsenceOngoingError")
@@ -81,9 +84,10 @@ describe("time policies at the boundary", () => {
 
 describe("list order decides which rejection is reported", () => {
   it("reassign: an actor who may not edit gets NotAllowedToEdit, not the assignee errors", () => {
-    const result = reassignAbsence({
-      absence: makeDraftAbsence({ creatorId: alice }), actor: makeActor({ userId: bob }),
-      assigneeId: child, assigneeIsOrganizationMember: false, now: at("2026-02-01T10:00:00Z"),
+    const result = Absence.decide({
+      absence: makeDraftAbsence({ creatorId: alice }),
+      command: ReassignAbsenceCommand.make({ actor: makeActor({ userId: bob }), assigneeId: child, assigneeIsOrganizationMember: false }),
+      now: at("2026-02-01T10:00:00Z"),
     })
     expect(failureTag(result)).toBe("NotAllowedToEditAbsenceError")
   })
