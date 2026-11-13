@@ -3,14 +3,14 @@ import { DomainEvents } from "../../shared/domain-events.ts"
 import type { OrganizationId, UserId } from "../../shared/ids.ts"
 import { OrganizationMembers } from "../../shared/organization-members.ts"
 import type { AbsenceActor } from "../domain/absence-actor.ts"
+import { Absence, DraftAbsenceCommand } from "../domain/absence.ts"
 import type {
   AbsenceChangedConcurrentlyError, AssigneeNotInOrganizationError, InvalidPeriodError, NotAllowedToAssignAbsenceError,
 } from "../domain/absence-error.ts"
 import { generateAbsenceId, type AbsenceId } from "../domain/absence-id.ts"
 import { AbsenceRepository } from "../domain/absence-repository.ts"
-import { createAbsence, initialAbsence } from "../domain/absence.ts"
 
-export type CreateAbsenceCommand = {
+export type CreateAbsenceRequest = {
   readonly organizationId: OrganizationId
   readonly actor: AbsenceActor
   readonly absenceId?: AbsenceId | undefined   // client-sent (optimistic UI, idempotent retry); else generated
@@ -20,7 +20,7 @@ export type CreateAbsenceCommand = {
 }
 
 export class CreateAbsenceService extends Context.Service<CreateAbsenceService, {
-  createAbsence(command: CreateAbsenceCommand): Effect.Effect<AbsenceId,
+  createAbsence(request: CreateAbsenceRequest): Effect.Effect<AbsenceId,
     | AssigneeNotInOrganizationError | NotAllowedToAssignAbsenceError | InvalidPeriodError
     | AbsenceChangedConcurrentlyError>
 }>()("CreateAbsenceService") {
@@ -34,8 +34,9 @@ export class CreateAbsenceService extends Context.Service<CreateAbsenceService, 
         const absenceId = requestedAbsenceId ?? generateAbsenceId()
         // loaded every time, even when the actor may assign anyone: skipping it would move the rule here
         const assigneeIsOrganizationMember = yield* organizationMembers.isOrganizationMember({ organizationId, userId: assigneeId })
-        const event = yield* Effect.fromResult(createAbsence({ absenceId, organizationId, actor, assigneeId, assigneeIsOrganizationMember, from, to, now }))
-        yield* absenceRepository.insertAbsence({ after: initialAbsence(event) })
+        const command = DraftAbsenceCommand.make({ absenceId, organizationId, actor, assigneeId, assigneeIsOrganizationMember, from, to })
+        const event = yield* Effect.fromResult(Absence.decide({ command, now }))
+        yield* absenceRepository.insertAbsence({ after: Absence.evolve({ event }) })
         yield* domainEvents.publishDomainEvent(event)
         return absenceId
       }),

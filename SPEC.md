@@ -29,7 +29,7 @@ Conventions:
 | States | One `Schema.TaggedStruct` per state: `DraftAbsence \| ActiveAbsence \| ArchivedAbsence` | library (`AvailableBook` / `BookOnHold`) |
 | Transitions | Exported functions (`archiveAbsence`, …) taking a named input type (`ArchiveAbsenceInput`); its `absence` field's type is the state that allows the transition; return `Result<Event, …errors>` | library (`Patron.placeOnHold` returns event), Vernon (intention-revealing names) |
 | State check | The repository read narrows: `findActiveAbsenceById` etc. | library (`FindAvailableBook`) |
-| Rules | Per transition: policy type `ArchiveAbsencePolicy` over `ArchiveAbsenceInput`, ordered list `archiveAbsencePolicies`; the who-acts policy, if any, is first; `checkPolicies` returns the first rejection | library (`PlacingOnHoldPolicy`), names ours |
+| Rules | Per transition: policy type `ArchiveAbsenceRule` over `ArchiveAbsenceInput`, ordered list `archiveAbsenceRules`; the who-acts policy, if any, is first; `checkRules` returns the first rejection | library (`PlacingOnHoldPolicy`), names ours |
 | Rule order | state (read) → policies in list order → value construction (`createPeriod`) | library |
 | Domain errors | `Data.TaggedError` with rich context (ids, state, dates); no failure events; never sent to clients | ours |
 | Time | `DateTime.Utc` everywhere except Prisma rows; `now` from `DateTime.now` in the use case (`TestClock` in tests); `Utc`, not `Zoned`, until a rule depends on local calendar days | ours |
@@ -124,7 +124,7 @@ src/
    │  ├─ absence.ts                     states, transition inputs, transitions
    │  ├─ period.ts                      Period, createPeriod, isPeriodOngoingAt
    │  ├─ absence-actor.ts               AbsenceActor, AbsenceReader, AbsenceVisibility, absenceVisibilityFromReader
-   │  ├─ absence-policy.ts              policies, per-transition lists, checkPolicies
+   │  ├─ absence-rule.ts              policies, per-transition lists, checkRules
    │  ├─ absence-event.ts               AbsenceDraftedEvent … AbsenceDeletedEvent, AbsenceEvent
    │  ├─ absence-error.ts               domain errors, AbsenceError
    │  └─ absence-repository.ts          port
@@ -260,7 +260,7 @@ export const absenceVisibilityFromReader = (reader: AbsenceReader): AbsenceVisib
 
 - The flags name capabilities. School managers typically hold them, but they are granted per person, so no role name fits. The domain defines what a flag allows; it doesn't know which permission sets it (§11).
 - No flag says "InOrganization": the permission adapter computes every flag for the route's organization, and every find and view is scoped to it.
-- `relatedUserIds` serves both sides: the visibility rule filters by it, `assigneeMustBeSelfOrRelatedPolicy` checks the assignee against it. The controller loads it once per request; use cases never call `UserRelationships`.
+- `relatedUserIds` serves both sides: the visibility rule filters by it, `assigneeMustBeSelfOrRelatedRule` checks the assignee against it. The controller loads it once per request; use cases never call `UserRelationships`.
 - Writes take the actor; reads take a visibility. A read without a user states its visibility (`AllAbsences()`) instead of faking an actor with every flag set.
 - `AbsenceVisibility` is `Data.TaggedEnum`, not a schema: it is never decoded or encoded.
 
@@ -306,7 +306,7 @@ Every transition has the same shape: policies in list order, then value construc
 export const createAbsence = (input: CreateAbsenceInput): Result.Result<
   AbsenceDraftedEvent, AssigneeNotInOrganizationError | NotAllowedToAssignAbsenceError | InvalidPeriodError
 > => Result.gen(function* () {
-  yield* checkPolicies(createAbsencePolicies, input)
+  yield* checkRules(createAbsenceRules, input)
   const period = yield* createPeriod({ from: input.from, to: input.to })
   return AbsenceDraftedEvent.make({
     absenceId: input.absenceId, organizationId: input.organizationId, actorId: input.actor.userId, occurredOn: input.now,
@@ -317,7 +317,7 @@ export const createAbsence = (input: CreateAbsenceInput): Result.Result<
 export const archiveAbsence = (input: ArchiveAbsenceInput): Result.Result<
   AbsenceArchivedEvent, NotAllowedToEditAbsenceError | AbsenceOngoingError
 > => Result.gen(function* () {
-  yield* checkPolicies(archiveAbsencePolicies, input)
+  yield* checkRules(archiveAbsenceRules, input)
   return AbsenceArchivedEvent.make({
     absenceId: input.absence.absenceId, organizationId: input.absence.organizationId, actorId: input.actor.userId,
     occurredOn: input.now,
@@ -356,29 +356,32 @@ deleteAbsence(input: DeleteAbsenceInput)
 | Facts about the actor (I/O) | users the actor is related to | loaded once by the controller onto the actor (`relatedUserIds`) |
 | Facts about the target (I/O) | assignee is a member of the organization | loaded by the use case into a required input field (`assigneeIsOrganizationMember`) |
 
-### Policies (`absence/domain/absence-policy.ts`)
+### Policies (`absence/domain/absence-rule.ts`)
 
 A policy is one rule of a transition: a pure function over the transition's input that succeeds or fails with a typed error. Each transition runs an ordered list; the list order decides which rejection is reported.
 
 ```ts
-// absence/domain/absence-policy.ts
+// lib/check-rules.ts
 // The first rejection wins.
-export const checkPolicies = <Input, E>(
-  policies: ReadonlyArray<(input: Input) => Result.Result<void, E>>,
+export const checkRules = <Input, E>(
+  rules: ReadonlyArray<(input: Input) => Result.Result<void, E>>,
   input: Input,
 ): Result.Result<void, E> => {
-  for (const policy of policies) {
-    const policyResult = policy(input)
-    if (Result.isFailure(policyResult)) return policyResult
+  for (const rule of rules) {
+    const ruleResult = rule(input)
+    if (Result.isFailure(ruleResult)) return ruleResult
   }
   return Result.succeed(undefined)
 }
+```
 
+```ts
+// absence/domain/absence-rule.ts
 const isActingUser = (input: { readonly actor: AbsenceActor; readonly userId: UserId }) => input.userId === input.actor.userId
 const isAbsenceCreator = (input: { readonly absence: Absence; readonly actor: AbsenceActor }) =>
   isActingUser({ actor: input.actor, userId: input.absence.creatorId })
 …
-export const onlyCreatorOrPermittedCanEditPolicy = (input: { readonly absence: EditableAbsence; readonly actor: AbsenceActor }) => {
+export const onlyCreatorOrPermittedCanEditRule = (input: { readonly absence: EditableAbsence; readonly actor: AbsenceActor }) => {
   const notAllowedToEditAbsence = () => Result.fail(new NotAllowedToEditAbsenceError({
     absenceId: input.absence.absenceId, actorId: input.actor.userId, absenceState: input.absence._tag,
   }))
@@ -388,23 +391,23 @@ export const onlyCreatorOrPermittedCanEditPolicy = (input: { readonly absence: E
   })
 }
 …
-// A shared policy takes a subset of every input that lists it.
-export const assigneeMustBeInOrganizationPolicy = (input: { readonly assigneeId: UserId; readonly assigneeIsOrganizationMember: boolean }) =>
+// A shared rule takes a subset of every input that lists it.
+export const assigneeMustBeInOrganizationRule = (input: { readonly assigneeId: UserId; readonly assigneeIsOrganizationMember: boolean }) =>
   input.assigneeIsOrganizationMember
     ? Result.succeed(undefined)
     : Result.fail(new AssigneeNotInOrganizationError({ assigneeId: input.assigneeId }))
 
-export const assigneeMustBeSelfOrRelatedPolicy = (input: { readonly actor: AbsenceActor; readonly assigneeId: UserId }) =>
+export const assigneeMustBeSelfOrRelatedRule = (input: { readonly actor: AbsenceActor; readonly assigneeId: UserId }) =>
   input.actor.mayAssignAnyone
     || isActingUser({ actor: input.actor, userId: input.assigneeId })
     || isRelatedToActor({ actor: input.actor, userId: input.assigneeId })
     ? Result.succeed(undefined)
     : Result.fail(new NotAllowedToAssignAbsenceError({ actorId: input.actor.userId, assigneeId: input.assigneeId }))
 
-// one function for the instant the policy checks and the error reports
+// one function for the instant the rule checks and the error reports
 export const absenceEditableUntil = (absence: EditableAbsence): DateTime.Utc => DateTime.add(absence.createdAt, { hours: 1 })
 
-export const editOnlyInFirstHourPolicy = (input: { readonly absence: EditableAbsence; readonly now: DateTime.Utc }) =>
+export const editOnlyInFirstHourRule = (input: { readonly absence: EditableAbsence; readonly now: DateTime.Utc }) =>
   DateTime.isLessThanOrEqualTo(input.now, absenceEditableUntil(input.absence))
     ? Result.succeed(undefined)
     : Result.fail(new AbsenceEditWindowClosedError({
@@ -413,24 +416,24 @@ export const editOnlyInFirstHourPolicy = (input: { readonly absence: EditableAbs
 
 // Per transition: a policy type and an ordered list. The order decides which rejection is reported.
 …
-export type ReassignAbsencePolicy = (input: ReassignAbsenceInput) => Result.Result<
+export type ReassignAbsenceRule = (input: ReassignAbsenceInput) => Result.Result<
   void, NotAllowedToEditAbsenceError | AssigneeNotInOrganizationError | NotAllowedToAssignAbsenceError | AbsenceEditWindowClosedError
 >
-export const reassignAbsencePolicies: ReadonlyArray<ReassignAbsencePolicy> = [
-  onlyCreatorOrPermittedCanEditPolicy, // may I touch this absence?
-  assigneeMustBeInOrganizationPolicy,  // is the new assignee in the organization?
-  assigneeMustBeSelfOrRelatedPolicy,   // may I give it to them?
-  editOnlyInFirstHourPolicy,
+export const reassignAbsenceRules: ReadonlyArray<ReassignAbsenceRule> = [
+  onlyCreatorOrPermittedCanEditRule, // may I touch this absence?
+  assigneeMustBeInOrganizationRule,  // is the new assignee in the organization?
+  assigneeMustBeSelfOrRelatedRule,   // may I give it to them?
+  editOnlyInFirstHourRule,
 ]
 …
-export type ArchiveAbsencePolicy = (input: ArchiveAbsenceInput) => Result.Result<void, NotAllowedToEditAbsenceError | AbsenceOngoingError>
-export const cannotArchiveWhileOngoingPolicy: ArchiveAbsencePolicy = (input) =>
+export type ArchiveAbsenceRule = (input: ArchiveAbsenceInput) => Result.Result<void, NotAllowedToEditAbsenceError | AbsenceOngoingError>
+export const cannotArchiveWhileOngoingRule: ArchiveAbsenceRule = (input) =>
   isPeriodOngoingAt({ period: input.absence.period, now: input.now })
     ? Result.fail(new AbsenceOngoingError({ absenceId: input.absence.absenceId, period: input.absence.period }))
     : Result.succeed(undefined)
-export const archiveAbsencePolicies: ReadonlyArray<ArchiveAbsencePolicy> = [
-  onlyCreatorOrPermittedCanEditPolicy,
-  cannotArchiveWhileOngoingPolicy,
+export const archiveAbsenceRules: ReadonlyArray<ArchiveAbsenceRule> = [
+  onlyCreatorOrPermittedCanEditRule,
+  cannotArchiveWhileOngoingRule,
 ]
 ```
 
@@ -439,9 +442,9 @@ Names per transition share its prefix, so grepping `ArchiveAbsence` finds the wh
 | Slot | Name pattern | Example |
 |---|---|---|
 | Input | `<Transition>AbsenceInput` | `ArchiveAbsenceInput` |
-| Policy type | `<Transition>AbsencePolicy` | `ArchiveAbsencePolicy` |
-| Ordered list | `<transition>AbsencePolicies` | `archiveAbsencePolicies` |
-| Single policy | the rule as a short sentence + `Policy`, without the subject. "Permitted" means the actor holds the flag | `cannotArchiveWhileOngoingPolicy` |
+| Policy type | `<Transition>AbsenceRule` | `ArchiveAbsenceRule` |
+| Ordered list | `<transition>AbsenceRules` | `archiveAbsenceRules` |
+| Single policy | the rule as a short sentence + `Rule`, without the subject. "Permitted" means the actor holds the flag | `cannotArchiveWhileOngoingRule` |
 
 | Transition | Allowed in | Policies (in order) | Also |
 |---|---|---|---|
@@ -454,7 +457,7 @@ Names per transition share its prefix, so grepping `ArchiveAbsence` finds the wh
 
 - "Permitted" only ever applies to active absences; drafts belong to their creator.
 - The edit and delete actor policies branch on state because the rule differs between Draft and Active while the input type accepts both. `Match.valueTags` is exhaustive: a new state in `EditableAbsence` doesn't compile until it has an actor rule.
-- No `anyPolicy` combinator: `||` over named predicates says "creator or permitted" without picking which rejection to report.
+- No `anyRule` combinator: `||` over named predicates says "creator or permitted" without picking which rejection to report.
 - Shared policies return a narrower `Result` than the list's policy type; they are assignable to it, so they need no annotation.
 - One list per transition, even when two are identical today (reschedule and reassign share their first and last policy), so they can diverge without a rename.
 - A new rule is one function added to one list, plus its error in the policy type and the transition's signature.
@@ -552,13 +555,13 @@ export class AbsenceEditWindowClosedError extends Data.TaggedError("AbsenceEditW
 | `AbsenceStillDraftError` | `absenceId` | `findActiveAbsenceById` |
 | `AbsenceAlreadyActiveError` | `absenceId` | `findDraftAbsenceById` |
 | `AbsenceAlreadyArchivedError` | `absenceId` | every find |
-| `NotAbsenceCreatorError` | `absenceId`, `actorId` | `onlyCreatorCanActivatePolicy` |
-| `NotAllowedToEditAbsenceError` | `absenceId`, `actorId`, `absenceState` | `onlyCreatorOrPermittedCanEditPolicy` |
-| `NotAllowedToDeleteAbsenceError` | `absenceId`, `actorId`, `absenceState` | `onlyCreatorOrPermittedCanDeletePolicy` |
-| `AssigneeNotInOrganizationError` | `assigneeId` | `assigneeMustBeInOrganizationPolicy` |
-| `NotAllowedToAssignAbsenceError` | `actorId`, `assigneeId` | `assigneeMustBeSelfOrRelatedPolicy` |
-| `AbsenceEditWindowClosedError` | `absenceId`, `createdAt`, `editableUntil` | `editOnlyInFirstHourPolicy` |
-| `AbsenceOngoingError` | `absenceId`, `period` | `cannotArchiveWhileOngoingPolicy` |
+| `NotAbsenceCreatorError` | `absenceId`, `actorId` | `onlyCreatorCanActivateRule` |
+| `NotAllowedToEditAbsenceError` | `absenceId`, `actorId`, `absenceState` | `onlyCreatorOrPermittedCanEditRule` |
+| `NotAllowedToDeleteAbsenceError` | `absenceId`, `actorId`, `absenceState` | `onlyCreatorOrPermittedCanDeleteRule` |
+| `AssigneeNotInOrganizationError` | `assigneeId` | `assigneeMustBeInOrganizationRule` |
+| `NotAllowedToAssignAbsenceError` | `actorId`, `assigneeId` | `assigneeMustBeSelfOrRelatedRule` |
+| `AbsenceEditWindowClosedError` | `absenceId`, `createdAt`, `editableUntil` | `editOnlyInFirstHourRule` |
+| `AbsenceOngoingError` | `absenceId`, `period` | `cannotArchiveWhileOngoingRule` |
 | `InvalidPeriodError` | `from`, `to` | `createPeriod` |
 | `AbsenceChangedConcurrentlyError` | `absenceId` | every write: another write came first (a taken id on insert, no row matching the guard on update or delete) |
 
@@ -793,7 +796,7 @@ CreateAbsenceService.createAbsence({ organizationId, actor, absenceId?, assignee
 │    : Effect<boolean>   → assigneeIsOrganizationMember
 ├─ createAbsence({ absenceId, organizationId, actor, assigneeId, assigneeIsOrganizationMember, from, to, now })
 │    : Result<AbsenceDraftedEvent, AssigneeNotInOrganizationError | NotAllowedToAssignAbsenceError | InvalidPeriodError>
-│  ├─ checkPolicies(createAbsencePolicies, input)
+│  ├─ checkRules(createAbsenceRules, input)
 │  └─ createPeriod({ from, to })
 ├─ initialAbsence(event): Absence
 ├─ AbsenceRepository.insertAbsence({ after })
@@ -805,7 +808,7 @@ RescheduleAbsenceService.rescheduleAbsence({ organizationId, actor, absenceId, f
 │    : Effect<EditableAbsence, AbsenceNotFoundError | AbsenceAlreadyArchivedError>
 ├─ rescheduleAbsence({ absence, actor, from, to, now })
 │    : Result<AbsenceRescheduledEvent, NotAllowedToEditAbsenceError | AbsenceEditWindowClosedError | InvalidPeriodError>
-│  ├─ checkPolicies(rescheduleAbsencePolicies, input)
+│  ├─ checkRules(rescheduleAbsenceRules, input)
 │  └─ createPeriod({ from, to })
 ├─ evolveAbsence({ absence, event }): Absence
 ├─ AbsenceRepository.updateAbsence({ before, after })
@@ -819,7 +822,7 @@ ReassignAbsenceService.reassignAbsence({ organizationId, actor, absenceId, assig
 │    : Effect<boolean>   → assigneeIsOrganizationMember (after the find: a missing absence is 404 first)
 ├─ reassignAbsence({ absence, actor, assigneeId, assigneeIsOrganizationMember, now })
 │    : Result<AbsenceReassignedEvent, NotAllowedToEditAbsenceError | AssigneeNotInOrganizationError | NotAllowedToAssignAbsenceError | AbsenceEditWindowClosedError>
-│  └─ checkPolicies(reassignAbsencePolicies, input)
+│  └─ checkRules(reassignAbsenceRules, input)
 ├─ evolveAbsence({ absence, event }): Absence
 ├─ AbsenceRepository.updateAbsence({ before, after })
 │    : Effect<void, AbsenceChangedConcurrentlyError>
@@ -1200,7 +1203,7 @@ Paths are relative to the group prefix `/organizations/:organizationId`. Instant
 | `PUT /absences/:absenceId/assignee` `{ assigneeId }` | `reassignAbsence` | 200 view | `AbsenceNotFound`, `AbsenceAlreadyArchived`, `NotAllowedToEditAbsence`, `AssigneeNotInOrganization`, `NotAllowedToAssignAbsence`, `AbsenceEditWindowClosed`, `AbsenceChangedConcurrently` |
 | `POST /absences/:absenceId/activate` | `activateAbsence` | 200 view | `AbsenceNotFound`, `AbsenceAlreadyActive`, `AbsenceAlreadyArchived`, `NotAbsenceCreator`, `AbsenceChangedConcurrently` |
 | `POST /absences/:absenceId/archive` | `archiveAbsence` | 200 view | `AbsenceNotFound`, `AbsenceStillDraft`, `AbsenceAlreadyArchived`, `NotAllowedToEditAbsence`, `AbsenceOngoing`, `AbsenceChangedConcurrently` |
-| `DELETE /absences/:absenceId` | `deleteAbsence` | 204 | `AbsenceNotFound`, `AbsenceAlreadyArchived`, `NotAllowedToDeleteAbsence`, `AbsenceChangedConcurrently` |
+| `DELETE /absences/:absenceId` | `withdrawAbsence` | 204 | `AbsenceNotFound`, `AbsenceAlreadyArchived`, `NotAllowedToDeleteAbsence`, `AbsenceChangedConcurrently` |
 | `GET /absences/:absenceId` | `getAbsenceById` | 200 view | `AbsenceNotFound` |
 | `GET /absences?assigneeId=&creatorId=` | `listAbsences` | 200 view[] | — |
 
@@ -1210,7 +1213,7 @@ Every endpoint also returns `NotAuthenticatedHttpError` (401, the host's) and `N
 // absence/http/absence-api.ts
 const AbsencePathParams = Schema.Struct({ ...OrganizationPathParams.fields, absenceId: AbsenceId })
 
-// Errors in check order: not found → wrong state → actor → policy / value → concurrency.
+// Errors in check order: not found → wrong state → actor → rule / value → concurrency.
 export class AbsenceApiGroup extends HttpApiGroup.make("absences")
   .add(
     HttpApiEndpoint.post("createAbsence", "/absences", {
@@ -1352,10 +1355,10 @@ Tests (`test/`), at the lowest place that owns each rule. Fixtures (`test/suppor
 
 | Rule | Test |
 |---|---|
-| Actor policies: own / others' draft / others' active × flag | `absence-policy.test.ts`, table, plain values |
-| Assignee policies: membership × self / related / unrelated × `mayAssignAnyone` | `absence-policy.test.ts`, through `checkPolicies(createAbsencePolicies, …)` |
-| Edit window at exactly `absenceEditableUntil` and 1 ms after; ongoing at `from` and `to` | `absence-policy.test.ts` |
-| List order decides the reported rejection | `absence-policy.test.ts` (reassign) |
+| Actor policies: own / others' draft / others' active × flag | `absence-rule.test.ts`, table, plain values |
+| Assignee policies: membership × self / related / unrelated × `mayAssignAnyone` | `absence-rule.test.ts`, through `checkRules(createAbsenceRules, …)` |
+| Edit window at exactly `absenceEditableUntil` and 1 ms after; ongoing at `from` and `to` | `absence-rule.test.ts` |
+| List order decides the reported rejection | `absence-rule.test.ts` (reassign) |
 | Permissions → flags, scoped to the organization | `absence-translations.test.ts` |
 | Domain error → HTTP variant and status | `absence-translations.test.ts` |
 | `matchTag` dispatch; result typed by tag; missing or unknown tag rejected (`@ts-expect-error`) | `match-tag.test.ts` |

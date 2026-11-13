@@ -6,9 +6,9 @@ import { UserRelationships } from "../../shared/user-relationships.ts"
 import { ActivateAbsenceService } from "../application/activate-absence-service.ts"
 import { ArchiveAbsenceService } from "../application/archive-absence-service.ts"
 import { CreateAbsenceService } from "../application/create-absence-service.ts"
-import { DeleteAbsenceService } from "../application/delete-absence-service.ts"
 import { ReassignAbsenceService } from "../application/reassign-absence-service.ts"
 import { RescheduleAbsenceService } from "../application/reschedule-absence-service.ts"
+import { WithdrawAbsenceService } from "../application/withdraw-absence-service.ts"
 import { absenceVisibilityFromReader } from "../domain/absence-actor.ts"
 import { absenceActorFromPermissions } from "../infrastructure/absence-permissions.ts"
 import { AbsenceViews } from "../view/absence-views.ts"
@@ -20,7 +20,7 @@ export const AbsenceController = HttpApiBuilder.group(Api, "absences", Effect.fn
   const reassignAbsenceService = yield* ReassignAbsenceService
   const activateAbsenceService = yield* ActivateAbsenceService
   const archiveAbsenceService = yield* ArchiveAbsenceService
-  const deleteAbsenceService = yield* DeleteAbsenceService
+  const withdrawAbsenceService = yield* WithdrawAbsenceService
   const absenceViews = yield* AbsenceViews
   const userRelationships = yield* UserRelationships
 
@@ -71,9 +71,9 @@ export const AbsenceController = HttpApiBuilder.group(Api, "absences", Effect.fn
       return yield* absenceViews.getAbsenceById({ organizationId, visibility, absenceId: params.absenceId })
     }).pipe(Effect.mapError(absenceHttpErrorFromAbsenceError)),
 
-    deleteAbsence: ({ params }) => Effect.gen(function* () {
+    withdrawAbsence: ({ params }) => Effect.gen(function* () {
       const { organizationId, actor } = yield* loadAbsenceActorAndVisibility
-      yield* deleteAbsenceService.deleteAbsence({ organizationId, actor, absenceId: params.absenceId })
+      yield* withdrawAbsenceService.withdrawAbsence({ organizationId, actor, absenceId: params.absenceId })
     }).pipe(Effect.mapError(absenceHttpErrorFromAbsenceError)),
 
     getAbsenceById: ({ params }) => Effect.gen(function* () {

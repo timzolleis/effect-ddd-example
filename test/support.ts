@@ -1,15 +1,12 @@
-import { assert } from "@effect/vitest"
 import { PrismaPg } from "@prisma/adapter-pg"
 import { DateTime, Effect, Layer, Redacted } from "effect"
 import { PrismaClient } from "~prisma/client"
 import { layerFromPrismaClient, PrismaService } from "~prisma/effect"
 import type { AbsenceActor } from "../src/absence/domain/absence-actor.ts"
-import {
-  AbsenceActivatedEvent, AbsenceArchivedEvent, AbsenceDraftedEvent, type AbsenceChangeEvent, type AbsenceCreationEvent,
-} from "../src/absence/domain/absence-event.ts"
 import { AbsenceId, generateAbsenceId } from "../src/absence/domain/absence-id.ts"
 import {
-  evolveAbsence, initialAbsence, type Absence, type ActiveAbsence, type ArchivedAbsence, type DraftAbsence,
+  Absence, AbsenceActivatedEvent, AbsenceArchivedEvent, AbsenceDraftedEvent, AbsenceWithdrawnEvent, type ActiveAbsence, type ArchivedAbsence,
+  type DiscardedAbsence, type DraftAbsence,
 } from "../src/absence/domain/absence.ts"
 import { AuthMiddleware, NotAuthenticatedHttpError } from "../src/lib/auth-middleware.ts"
 import { CurrentUser } from "../src/shared/current-user.ts"
@@ -34,9 +31,6 @@ export const makeActor = (overrides: Partial<AbsenceActor> & Pick<AbsenceActor, 
 })
 
 // A fixture is the events that lead to its state, never a state written by hand.
-const absenceAfter = (creation: AbsenceCreationEvent, ...changes: ReadonlyArray<AbsenceChangeEvent>): Absence =>
-  changes.reduce((absence, event) => evolveAbsence({ absence, event }), initialAbsence(creation))
-
 type AbsenceFixtureInput = { readonly creatorId?: UserId; readonly assigneeId?: UserId; readonly createdAt?: DateTime.Utc }
 
 const makeDraftedEvent = ({ creatorId = alice, assigneeId = alice, createdAt = at("2026-02-01T10:00:00Z") }: AbsenceFixtureInput) =>
@@ -48,23 +42,22 @@ const makeActivatedEvent = (drafted: AbsenceDraftedEvent, occurredOn: DateTime.U
   AbsenceActivatedEvent.make({ absenceId: drafted.absenceId, organizationId, actorId: drafted.creatorId, occurredOn })
 const makeArchivedEvent = (drafted: AbsenceDraftedEvent, occurredOn: DateTime.Utc) =>
   AbsenceArchivedEvent.make({ absenceId: drafted.absenceId, organizationId, actorId: drafted.creatorId, occurredOn })
+const makeWithdrawnEvent = (drafted: AbsenceDraftedEvent, occurredOn: DateTime.Utc) =>
+  AbsenceWithdrawnEvent.make({ absenceId: drafted.absenceId, organizationId, actorId: drafted.creatorId, occurredOn })
 
-export const makeDraftAbsence = (input: AbsenceFixtureInput = {}): DraftAbsence => {
-  const absence = absenceAfter(makeDraftedEvent(input))
-  assert(absence._tag === "DraftAbsence")
-  return absence
-}
+export const makeDraftAbsence = (input: AbsenceFixtureInput = {}): DraftAbsence => Absence.evolve({ event: makeDraftedEvent(input) })
 export const makeActiveAbsence = ({ activatedOn = at("2026-02-01T10:05:00Z"), ...input }: AbsenceFixtureInput & { readonly activatedOn?: DateTime.Utc } = {}): ActiveAbsence => {
   const drafted = makeDraftedEvent(input)
-  const absence = absenceAfter(drafted, makeActivatedEvent(drafted, activatedOn))
-  assert(absence._tag === "ActiveAbsence")
-  return absence
+  return Absence.evolve({ absence: Absence.evolve({ event: drafted }), event: makeActivatedEvent(drafted, activatedOn) })
 }
 export const makeArchivedAbsence = (input: AbsenceFixtureInput = {}): ArchivedAbsence => {
   const drafted = makeDraftedEvent(input)
-  const absence = absenceAfter(drafted, makeActivatedEvent(drafted, at("2026-02-01T10:05:00Z")), makeArchivedEvent(drafted, at("2026-03-03T00:00:00Z")))
-  assert(absence._tag === "ArchivedAbsence")
-  return absence
+  const absence = Absence.evolve({ absence: Absence.evolve({ event: drafted }), event: makeActivatedEvent(drafted, at("2026-02-01T10:05:00Z")) })
+  return Absence.evolve({ absence, event: makeArchivedEvent(drafted, at("2026-03-03T00:00:00Z")) })
+}
+export const makeDiscardedAbsence = (input: AbsenceFixtureInput = {}): DiscardedAbsence => {
+  const drafted = makeDraftedEvent(input)
+  return Absence.evolve({ absence: Absence.evolve({ event: drafted }), event: makeWithdrawnEvent(drafted, at("2026-02-01T10:30:00Z")) })
 }
 
 export const unknownAbsenceId = AbsenceId.make("abs_zzzzzzzzzzzzzzzzzzzzzzzz")

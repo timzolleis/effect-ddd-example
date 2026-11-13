@@ -1,3 +1,4 @@
+import type { DateTime } from "effect"
 import { Context, Effect } from "effect"
 import type { OrganizationId } from "../../shared/ids.ts"
 import type {
@@ -9,10 +10,11 @@ import type { Absence, ActiveAbsence, DraftAbsence, EditableAbsence } from "./ab
 
 export type FindAbsenceByIdInput = { readonly organizationId: OrganizationId; readonly absenceId: AbsenceId }
 
-// One write per kind of event, with the states it needs: a create has no state before, a delete none after.
+// One write per kind of event, with the states it needs: a create has no state before.
 export type InsertAbsenceInput = { readonly after: Absence }
 export type UpdateAbsenceInput = { readonly before: Absence; readonly after: Absence }
-export type DeleteAbsenceInput = { readonly before: Absence }
+
+export type PurgeArchivedAbsencesInput = { readonly archivedBefore: DateTime.Utc }
 
 export class AbsenceRepository extends Context.Service<AbsenceRepository, {
   findDraftAbsenceById(input: FindAbsenceByIdInput):
@@ -23,5 +25,6 @@ export class AbsenceRepository extends Context.Service<AbsenceRepository, {
     Effect.Effect<EditableAbsence, AbsenceNotFoundError | AbsenceAlreadyArchivedError>
   insertAbsence(input: InsertAbsenceInput): Effect.Effect<void, AbsenceChangedConcurrentlyError>
   updateAbsence(input: UpdateAbsenceInput): Effect.Effect<void, AbsenceChangedConcurrentlyError>
-  deleteAbsence(input: DeleteAbsenceInput): Effect.Effect<void, AbsenceChangedConcurrentlyError>
+  // archived and discarded rows, every organization: the retention sweep
+  purgeArchivedAbsences(input: PurgeArchivedAbsencesInput): Effect.Effect<void>
 }>()("AbsenceRepository") {}

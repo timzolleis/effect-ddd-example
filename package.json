@@ -7,10 +7,12 @@
     "typecheck": "tsc -p .",
     "test": "vitest run",
     "check:doc": "node scripts/check-doc-excerpts.mjs",
-    "check:skill": "node scripts/check-doc-excerpts.mjs ~/.agents/skills/effect-ddd",
+    "check:skill": "node scripts/check-doc-excerpts.mjs ${EFFECT_DDD_SKILL:-~/code/effect-ddd/skills/effect-ddd}",
     "db:up": "docker compose up -d --wait",
     "db:push": "prisma db push",
-    "verify": "npm run generate && npm run typecheck && npm run db:up && npm run db:push && npm test && npm run check:doc"
+    "verify": "npm run generate && npm run typecheck && npm run db:up && npm run db:push && npm test && npm run check:doc && npm run check:lib",
+    "lib:install": "node scripts/registry-lib.mjs install",
+    "check:lib": "node scripts/registry-lib.mjs check"
   },
   "dependencies": {
     "@paralleldrive/cuid2": "^3.3.0",
@@ -25,7 +27,7 @@
     "@types/pg": "^8.23.1",
     "effect-prisma-generator": "^0.11.0",
     "prisma": "^7.10.1",
-    "typescript": "5.9",
+    "typescript": "^7.0.2",
     "vitest": "^5.0.5"
   },
   "allowScripts": {

@@ -14,7 +14,7 @@ import {
 
 const AbsencePathParams = Schema.Struct({ ...OrganizationPathParams.fields, absenceId: AbsenceId })
 
-// Errors in check order: not found → wrong state → actor → policy / value → concurrency.
+// Errors in check order: not found → wrong state → actor → rule / value → concurrency.
 export class AbsenceApiGroup extends HttpApiGroup.make("absences")
   .add(
     HttpApiEndpoint.post("createAbsence", "/absences", {
@@ -28,7 +28,7 @@ export class AbsenceApiGroup extends HttpApiGroup.make("absences")
       success: AbsenceView.pipe(HttpApiSchema.status(201)),
       error: [
         AssigneeNotInOrganizationHttpError, NotAllowedToAssignAbsenceHttpError, InvalidPeriodHttpError, AbsenceChangedConcurrentlyHttpError,
-        AbsenceNotFoundHttpError, // read-back, if the absence is deleted before it
+        AbsenceNotFoundHttpError, // read-back
       ],
     }),
     HttpApiEndpoint.put("rescheduleAbsence", "/absences/:absenceId/period", {
@@ -66,7 +66,7 @@ export class AbsenceApiGroup extends HttpApiGroup.make("absences")
         NotAllowedToEditAbsenceHttpError, AbsenceOngoingHttpError, AbsenceChangedConcurrentlyHttpError,
       ],
     }),
-    HttpApiEndpoint.delete("deleteAbsence", "/absences/:absenceId", {
+    HttpApiEndpoint.delete("withdrawAbsence", "/absences/:absenceId", {
       params: AbsencePathParams,
       success: HttpApiSchema.NoContent,
       error: [

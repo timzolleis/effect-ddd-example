@@ -2,30 +2,30 @@ import { Context, DateTime, Effect, Layer } from "effect"
 import { DomainEvents } from "../../shared/domain-events.ts"
 import type { OrganizationId } from "../../shared/ids.ts"
 import type { AbsenceActor } from "../domain/absence-actor.ts"
+import { Absence, WithdrawAbsenceCommand } from "../domain/absence.ts"
 import type {
   AbsenceAlreadyArchivedError, AbsenceChangedConcurrentlyError, AbsenceNotFoundError, NotAllowedToDeleteAbsenceError,
 } from "../domain/absence-error.ts"
 import type { AbsenceId } from "../domain/absence-id.ts"
 import { AbsenceRepository } from "../domain/absence-repository.ts"
-import { deleteAbsence } from "../domain/absence.ts"
 
-export type DeleteAbsenceCommand = { readonly organizationId: OrganizationId; readonly actor: AbsenceActor; readonly absenceId: AbsenceId }
+export type WithdrawAbsenceRequest = { readonly organizationId: OrganizationId; readonly actor: AbsenceActor; readonly absenceId: AbsenceId }
 
-export class DeleteAbsenceService extends Context.Service<DeleteAbsenceService, {
-  deleteAbsence(command: DeleteAbsenceCommand): Effect.Effect<void,
+export class WithdrawAbsenceService extends Context.Service<WithdrawAbsenceService, {
+  withdrawAbsence(request: WithdrawAbsenceRequest): Effect.Effect<void,
     | AbsenceNotFoundError | AbsenceAlreadyArchivedError
     | NotAllowedToDeleteAbsenceError
     | AbsenceChangedConcurrentlyError>
-}>()("DeleteAbsenceService") {
-  static layer = Layer.effect(DeleteAbsenceService, Effect.gen(function* () {
+}>()("WithdrawAbsenceService") {
+  static layer = Layer.effect(WithdrawAbsenceService, Effect.gen(function* () {
     const absenceRepository = yield* AbsenceRepository
     const domainEvents = yield* DomainEvents
-    return DeleteAbsenceService.of({
-      deleteAbsence: Effect.fn("DeleteAbsenceService.deleteAbsence")(function* ({ organizationId, actor, absenceId }) {
+    return WithdrawAbsenceService.of({
+      withdrawAbsence: Effect.fn("WithdrawAbsenceService.withdrawAbsence")(function* ({ organizationId, actor, absenceId }) {
         const now = yield* DateTime.now
         const absence = yield* absenceRepository.findEditableAbsenceById({ organizationId, absenceId })
-        const event = yield* Effect.fromResult(deleteAbsence({ absence, actor, now }))
-        yield* absenceRepository.deleteAbsence({ before: absence })
+        const event = yield* Effect.fromResult(Absence.decide({ absence, command: WithdrawAbsenceCommand.make({ actor }), now }))
+        yield* absenceRepository.updateAbsence({ before: absence, after: Absence.evolve({ absence, event }) })
         yield* domainEvents.publishDomainEvent(event)
       }),
     })
