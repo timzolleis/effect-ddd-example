@@ -168,35 +168,42 @@ expectTrue<Equal<ReturnType<typeof checkCreatorIsAssignable>, Result.Result<
   void, NotAllowedToEditAbsenceError | AbsenceOngoingError | AssigneeNotInOrganizationError
 >>>()
 
-// Strict decide: a wrong pair fails, a union fails unless every state in it accepts the command.
+// Strict decide: the state decides which commands fit, so a wrong pair fails on command; a union state accepts only what
+// every state in it accepts, and a union command fits only where every command in it fits.
 Absence.decide({ absence: activeAbsence, command: archiveAbsenceCommand, now })
 Absence.decide({ absence: editableAbsence, command: withdrawAbsenceCommand, now })
 Absence.decide({
-  // @ts-expect-error an ActiveAbsence cannot be activated
   absence: activeAbsence,
+  // @ts-expect-error an ActiveAbsence cannot be activated
   command: activateAbsenceCommand, now,
 })
 Absence.decide({
-  // @ts-expect-error the union holds a state that cannot be archived
   absence: editableAbsence,
+  // @ts-expect-error the union holds a state that cannot be archived
   command: archiveAbsenceCommand, now,
 })
 Absence.decide({
-  // @ts-expect-error the union holds states that cannot be withdrawn
   absence: anyAbsence,
+  // @ts-expect-error the union holds states that cannot be withdrawn
   command: withdrawAbsenceCommand, now,
 })
 Absence.decide({
-  // @ts-expect-error an ArchivedAbsence cannot be withdrawn
   absence: archivedAbsence,
+  // @ts-expect-error an ArchivedAbsence cannot be withdrawn
   command: withdrawAbsenceCommand, now,
 })
 // @ts-expect-error archive needs an absence
 Absence.decide({ command: archiveAbsenceCommand, now })
 Absence.decide({
-  // @ts-expect-error draft starts the lifecycle, so it takes no absence
   absence: draftAbsence,
+  // @ts-expect-error draft starts the lifecycle, so it takes no absence
   command: draftAbsenceCommand, now,
+})
+declare const archiveOrRescheduleCommand: ArchiveAbsenceCommand | RescheduleAbsenceCommand
+Absence.decide({
+  absence: draftAbsence,
+  // @ts-expect-error a DraftAbsence accepts reschedule but not archive
+  command: archiveOrRescheduleCommand, now,
 })
 
 // Per-command result type: the event of the record; the errors are exactly those of the rules decide runs plus its own.
@@ -221,6 +228,8 @@ expectTrue<Equal<typeof reassignDecision, Result.Result<
 >>>()
 const rescheduleDecisionOfEditable = Absence.decide({ absence: editableAbsence, command: rescheduleAbsenceCommand, now })
 expectTrue<Equal<typeof rescheduleDecisionOfEditable, typeof rescheduleDecision>>()
+const archiveOrRescheduleDecision = Absence.decide({ absence: activeAbsence, command: archiveOrRescheduleCommand, now })
+expectTrue<Equal<typeof archiveOrRescheduleDecision, typeof archiveDecision | typeof rescheduleDecision>>()
 
 const absenceAfterDraft = Absence.evolve({ event: absenceDraftedEvent })
 expectTrue<Equal<typeof absenceAfterDraft, DraftAbsence>>()
@@ -555,8 +564,8 @@ expectTrue<Equal<typeof activateDecisionOfBrokenDefinition, Result.Result<Absenc
 const activeAbsenceOfBrokenDefinition = WithMissingEvolve.evolve({ absence: draftAbsence, event: Result.getOrThrow(activateDecisionOfBrokenDefinition) })
 expectTrue<Equal<typeof activeAbsenceOfBrokenDefinition, any>>()
 WithMissingEvolve.decide({
-  // @ts-expect-error the from lists survive, so a wrong pair still fails
   absence: activeAbsence,
+  // @ts-expect-error the from lists survive, so a wrong pair still fails
   command: activateAbsenceCommand, now,
 })
 const draftAbsenceOfBrokenDefinition = WithMissingEvolve.evolve({ event: absenceDraftedEvent })

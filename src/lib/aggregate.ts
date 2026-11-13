@@ -64,6 +64,10 @@ type StateInputOfCall<Name extends string, States extends AnySchemasByTag, Accep
   ? {}
   : StateArgument<Name, [State] extends [States[AcceptingStateTags & keyof States]["Type"]] ? State : States[AcceptingStateTags & keyof States]["Type"]>
 type StateTagOfCall<State extends Tagged> = [State] extends [never] ? "initial" : State["_tag"]
+type CommandTagsAcceptedIn<Froms, StateTag> = { [Tag in keyof Froms]: [StateTag] extends [StateTagOfFrom<Froms[Tag]>] ? Tag : never }[keyof Froms]
+type CommandAcceptedIn<Commands extends AnySchemasByTag, Froms, State extends Tagged> =
+  CommandTypeOf<Commands, CommandTagsAcceptedIn<Froms, StateTagOfCall<State>>>
+type StateInputOfDecide<Name extends string, State> = [State] extends [never] ? {} : StateArgument<Name, State>
 // any: same as DecisionOfCall, for the evolves.
 type NextStateOfCall<Evolve, StateTag> = unknown extends Evolve ? any : NextStateOfEvolve<Evolve[StateTag & keyof Evolve]>
 type EventSchemasByTag<Events> = {
@@ -76,11 +80,11 @@ export type Aggregate<Name extends string, States extends AnySchemasByTag, Comma
   readonly commands: Commands
   readonly events: EventSchemasByTag<Events>
   readonly accepts: {
-    readonly [StateTag in "initial" | keyof States]: ReadonlyArray<{ [Tag in keyof Froms]: StateTag extends StateTagOfFrom<Froms[Tag]> ? Tag : never }[keyof Froms]>
+    readonly [StateTag in "initial" | keyof States]: ReadonlyArray<CommandTagsAcceptedIn<Froms, StateTag>>
   }
   readonly acceptedIn: { readonly [Tag in keyof Froms]: ReadonlyArray<StateTagOfFrom<Froms[Tag]>> }
-  readonly decide: <Command extends TypeUnion<Commands>, State extends TypeUnion<States> = never>(
-    input: { readonly command: Command } & Now & StateInputOfCall<Name, States, StateTagOfFrom<Froms[Command["_tag"] & keyof Froms]>, State>,
+  readonly decide: <State extends TypeUnion<States> = never, Command extends CommandAcceptedIn<Commands, Froms, State> = never>(
+    input: { readonly command: Command | CommandAcceptedIn<Commands, Froms, State> } & Now & StateInputOfDecide<Name, State>,
   ) => DecisionOfCall<Decisions[Command["_tag"] & keyof Decisions], Events[Command["_tag"] & keyof Events]>
   readonly evolve: <Event extends EventTypeOf<Events[keyof Events]> & Tagged, State extends TypeUnion<States> = never>(
     input: { readonly event: Event }
