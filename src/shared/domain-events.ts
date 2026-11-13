@@ -1,5 +1,5 @@
 import { Context, Effect } from "effect"
-import type { AbsenceEvent } from "../absence/domain/absence-aggregate.ts"
+import type { AbsenceEvent } from "../absence/domain/absence.ts"
 
 export type DomainEvent = AbsenceEvent // | …other modules' events
 

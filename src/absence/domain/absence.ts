@@ -1,120 +1,164 @@
-import { DateTime, Result, Schema } from "effect"
+import { Result, Schema } from "effect"
+import { Aggregate } from "../../lib/aggregate.ts"
 import { OrganizationId, UserId } from "../../shared/ids.ts"
-import type { AbsenceActor } from "./absence-actor.ts"
-import type {
-  AbsenceEditWindowClosedError, AbsenceOngoingError, AssigneeNotInOrganizationError, InvalidPeriodError,
-  NotAbsenceCreatorError, NotAllowedToAssignAbsenceError, NotAllowedToDeleteAbsenceError, NotAllowedToEditAbsenceError,
-} from "./absence-error.ts"
-import {
-  AbsenceActivatedEvent, AbsenceArchivedEvent, AbsenceDraftedEvent,
-  AbsenceReassignedEvent, AbsenceRescheduledEvent, AbsenceWithdrawnEvent,
-} from "./absence-event.ts"
+import { AbsenceActor } from "./absence-actor.ts"
 import { AbsenceId } from "./absence-id.ts"
 import {
-  activateAbsencePolicies, archiveAbsencePolicies, checkPolicies, createAbsencePolicies,
-  reassignAbsencePolicies, rescheduleAbsencePolicies, withdrawAbsencePolicies,
+  assigneeMustBeInOrganizationPolicy, assigneeMustBeSelfOrRelatedPolicy, cannotArchiveWhileOngoingPolicy, checkPolicies, editOnlyInFirstHourPolicy,
+  onlyCreatorCanActivatePolicy, onlyCreatorOrPermittedCanDeletePolicy, onlyCreatorOrPermittedCanEditPolicy,
 } from "./absence-policy.ts"
 import { createPeriod, Period } from "./period.ts"
 
 const absenceFields = {
-  absenceId: AbsenceId, organizationId: OrganizationId, creatorId: UserId, assigneeId: UserId,
-  period: Period, createdAt: Schema.DateTimeUtc,
-  updatedAt: Schema.DateTimeUtc,   // the instant of the last event; the repository guards on it
+  absenceId: AbsenceId, organizationId: OrganizationId, creatorId: UserId, assigneeId: UserId, period: Period,
+  createdAt: Schema.DateTimeUtc, updatedAt: Schema.DateTimeUtc,
 }
+const absenceEventFields = { absenceId: AbsenceId, organizationId: OrganizationId, actorId: UserId, occurredOn: Schema.DateTimeUtc }
 
-export const DraftAbsence = Schema.TaggedStruct("DraftAbsence", { ...absenceFields })
-export type DraftAbsence = typeof DraftAbsence.Type
-
-export const ActiveAbsence = Schema.TaggedStruct("ActiveAbsence", { ...absenceFields, activatedAt: Schema.DateTimeUtc })
-export type ActiveAbsence = typeof ActiveAbsence.Type
-
-export const ArchivedAbsence = Schema.TaggedStruct("ArchivedAbsence", {
-  ...absenceFields, activatedAt: Schema.DateTimeUtc, archivedAt: Schema.DateTimeUtc,
-})
-export type ArchivedAbsence = typeof ArchivedAbsence.Type
-
-// A withdrawn draft: never active, so no activatedAt. Readers see it only where they saw the draft.
+export const DraftAbsence     = Schema.TaggedStruct("DraftAbsence",     { ...absenceFields })
+export const ActiveAbsence    = Schema.TaggedStruct("ActiveAbsence",    { ...absenceFields, activatedAt: Schema.DateTimeUtc })
+export const ArchivedAbsence  = Schema.TaggedStruct("ArchivedAbsence",  { ...absenceFields, activatedAt: Schema.DateTimeUtc, archivedAt: Schema.DateTimeUtc })
 export const DiscardedAbsence = Schema.TaggedStruct("DiscardedAbsence", { ...absenceFields, archivedAt: Schema.DateTimeUtc })
+
+export const DraftAbsenceCommand      = Schema.TaggedStruct("DraftAbsenceCommand",      {
+  absenceId: AbsenceId, organizationId: OrganizationId, actor: AbsenceActor, assigneeId: UserId, assigneeIsOrganizationMember: Schema.Boolean,
+  from: Schema.DateTimeUtc, to: Schema.DateTimeUtc,
+})
+export const RescheduleAbsenceCommand = Schema.TaggedStruct("RescheduleAbsenceCommand", { actor: AbsenceActor, from: Schema.DateTimeUtc, to: Schema.DateTimeUtc })
+export const ReassignAbsenceCommand   = Schema.TaggedStruct("ReassignAbsenceCommand",   { actor: AbsenceActor, assigneeId: UserId, assigneeIsOrganizationMember: Schema.Boolean })
+export const ActivateAbsenceCommand   = Schema.TaggedStruct("ActivateAbsenceCommand",   { actor: AbsenceActor })
+export const ArchiveAbsenceCommand    = Schema.TaggedStruct("ArchiveAbsenceCommand",    { actor: AbsenceActor })
+export const WithdrawAbsenceCommand   = Schema.TaggedStruct("WithdrawAbsenceCommand",   { actor: AbsenceActor })
+
+export const AbsenceDraftedEvent     = Schema.TaggedStruct("AbsenceDraftedEvent",     { ...absenceEventFields, creatorId: UserId, assigneeId: UserId, period: Period })
+export const AbsenceRescheduledEvent = Schema.TaggedStruct("AbsenceRescheduledEvent", { ...absenceEventFields, period: Period, previousPeriod: Period })
+export const AbsenceReassignedEvent  = Schema.TaggedStruct("AbsenceReassignedEvent",  { ...absenceEventFields, assigneeId: UserId, previousAssigneeId: UserId })
+export const AbsenceActivatedEvent   = Schema.TaggedStruct("AbsenceActivatedEvent",   { ...absenceEventFields })
+export const AbsenceArchivedEvent    = Schema.TaggedStruct("AbsenceArchivedEvent",    { ...absenceEventFields })
+export const AbsenceWithdrawnEvent   = Schema.TaggedStruct("AbsenceWithdrawnEvent",   { ...absenceEventFields })
+
+export type DraftAbsence     = typeof DraftAbsence.Type
+export type ActiveAbsence    = typeof ActiveAbsence.Type
+export type ArchivedAbsence  = typeof ArchivedAbsence.Type
 export type DiscardedAbsence = typeof DiscardedAbsence.Type
+export type EditableAbsence  = DraftAbsence | ActiveAbsence
 
-export type Absence = DraftAbsence | ActiveAbsence | ArchivedAbsence | DiscardedAbsence   // nothing decodes to it
-export type EditableAbsence = DraftAbsence | ActiveAbsence
+export type AbsenceDraftedEvent     = typeof AbsenceDraftedEvent.Type
+export type AbsenceRescheduledEvent = typeof AbsenceRescheduledEvent.Type
+export type AbsenceReassignedEvent  = typeof AbsenceReassignedEvent.Type
+export type AbsenceActivatedEvent   = typeof AbsenceActivatedEvent.Type
+export type AbsenceArchivedEvent    = typeof AbsenceArchivedEvent.Type
+export type AbsenceWithdrawnEvent   = typeof AbsenceWithdrawnEvent.Type
 
-// The transition and its policies take the same input type.
-export type CreateAbsenceInput = {
-  readonly absenceId: AbsenceId; readonly organizationId: OrganizationId; readonly actor: AbsenceActor
-  readonly assigneeId: UserId; readonly assigneeIsOrganizationMember: boolean
-  readonly from: DateTime.Utc; readonly to: DateTime.Utc; readonly now: DateTime.Utc
-}
-export type RescheduleAbsenceInput = {
-  readonly absence: EditableAbsence; readonly actor: AbsenceActor
-  readonly from: DateTime.Utc; readonly to: DateTime.Utc; readonly now: DateTime.Utc
-}
-export type ReassignAbsenceInput = {
-  readonly absence: EditableAbsence; readonly actor: AbsenceActor
-  readonly assigneeId: UserId; readonly assigneeIsOrganizationMember: boolean; readonly now: DateTime.Utc
-}
-export type ActivateAbsenceInput = { readonly absence: DraftAbsence; readonly actor: AbsenceActor; readonly now: DateTime.Utc }
-export type ArchiveAbsenceInput = { readonly absence: ActiveAbsence; readonly actor: AbsenceActor; readonly now: DateTime.Utc }
-export type WithdrawAbsenceInput = { readonly absence: EditableAbsence; readonly actor: AbsenceActor; readonly now: DateTime.Utc }
+export const Absence = Aggregate.make("Absence", {
+  id: AbsenceId,
+  states: { DraftAbsence, ActiveAbsence, ArchivedAbsence, DiscardedAbsence },
+  commands: {
+    DraftAbsenceCommand, RescheduleAbsenceCommand, ReassignAbsenceCommand, ActivateAbsenceCommand, ArchiveAbsenceCommand, WithdrawAbsenceCommand,
+  },
 
-export const createAbsence = (input: CreateAbsenceInput): Result.Result<
-  AbsenceDraftedEvent, AssigneeNotInOrganizationError | NotAllowedToAssignAbsenceError | InvalidPeriodError
-> => Result.gen(function* () {
-  yield* checkPolicies(createAbsencePolicies, input)
-  const period = yield* createPeriod({ from: input.from, to: input.to })
-  return AbsenceDraftedEvent.make({
-    absenceId: input.absenceId, organizationId: input.organizationId, actorId: input.actor.userId, occurredOn: input.now,
-    creatorId: input.actor.userId, assigneeId: input.assigneeId, period,
-  })
+  handlers: {
+    DraftAbsenceCommand: {
+      from: ["start"],
+      event: AbsenceDraftedEvent,
+      decide: ({ command, now }) => Result.gen(function* () {
+        yield* checkPolicies([assigneeMustBeInOrganizationPolicy, assigneeMustBeSelfOrRelatedPolicy], {
+          actor: command.actor, assigneeId: command.assigneeId, assigneeIsOrganizationMember: command.assigneeIsOrganizationMember,
+        })
+        const period = yield* createPeriod({ from: command.from, to: command.to })
+        return AbsenceDraftedEvent.make({
+          absenceId: command.absenceId, organizationId: command.organizationId, actorId: command.actor.userId, occurredOn: now,
+          creatorId: command.actor.userId, assigneeId: command.assigneeId, period,
+        })
+      }),
+      evolve: {
+        start: ({ event }) => DraftAbsence.make({
+          absenceId: event.absenceId, organizationId: event.organizationId, creatorId: event.creatorId,
+          assigneeId: event.assigneeId, period: event.period, createdAt: event.occurredOn, updatedAt: event.occurredOn,
+        }),
+      },
+    },
+
+    RescheduleAbsenceCommand: {
+      from: [DraftAbsence, ActiveAbsence],
+      event: AbsenceRescheduledEvent,
+      decide: ({ absence, command, now }) => Result.gen(function* () {
+        yield* checkPolicies([onlyCreatorOrPermittedCanEditPolicy, editOnlyInFirstHourPolicy], { absence, actor: command.actor, now })
+        const period = yield* createPeriod({ from: command.from, to: command.to })
+        return AbsenceRescheduledEvent.make({
+          absenceId: absence.absenceId, organizationId: absence.organizationId, actorId: command.actor.userId, occurredOn: now,
+          period, previousPeriod: absence.period,
+        })
+      }),
+      evolve: {
+        DraftAbsence:  ({ absence, event }) => DraftAbsence.make({ ...absence, period: event.period, updatedAt: event.occurredOn }),
+        ActiveAbsence: ({ absence, event }) => ActiveAbsence.make({ ...absence, period: event.period, updatedAt: event.occurredOn }),
+      },
+    },
+
+    ReassignAbsenceCommand: {
+      from: [DraftAbsence, ActiveAbsence],
+      event: AbsenceReassignedEvent,
+      decide: ({ absence, command, now }) => Result.gen(function* () {
+        yield* checkPolicies(
+          [onlyCreatorOrPermittedCanEditPolicy, assigneeMustBeInOrganizationPolicy, assigneeMustBeSelfOrRelatedPolicy, editOnlyInFirstHourPolicy],
+          { absence, actor: command.actor, assigneeId: command.assigneeId, assigneeIsOrganizationMember: command.assigneeIsOrganizationMember, now },
+        )
+        return AbsenceReassignedEvent.make({
+          absenceId: absence.absenceId, organizationId: absence.organizationId, actorId: command.actor.userId, occurredOn: now,
+          assigneeId: command.assigneeId, previousAssigneeId: absence.assigneeId,
+        })
+      }),
+      evolve: {
+        DraftAbsence:  ({ absence, event }) => DraftAbsence.make({ ...absence, assigneeId: event.assigneeId, updatedAt: event.occurredOn }),
+        ActiveAbsence: ({ absence, event }) => ActiveAbsence.make({ ...absence, assigneeId: event.assigneeId, updatedAt: event.occurredOn }),
+      },
+    },
+
+    ActivateAbsenceCommand: {
+      from: [DraftAbsence],
+      event: AbsenceActivatedEvent,
+      decide: ({ absence, command, now }) => Result.gen(function* () {
+        yield* checkPolicies([onlyCreatorCanActivatePolicy], { absence, actor: command.actor, now })
+        return AbsenceActivatedEvent.make({
+          absenceId: absence.absenceId, organizationId: absence.organizationId, actorId: command.actor.userId, occurredOn: now,
+        })
+      }),
+      evolve: {
+        DraftAbsence: ({ absence, event }) => ActiveAbsence.make({ ...absence, activatedAt: event.occurredOn, updatedAt: event.occurredOn }),
+      },
+    },
+
+    ArchiveAbsenceCommand: {
+      from: [ActiveAbsence],
+      event: AbsenceArchivedEvent,
+      decide: ({ absence, command, now }) => Result.gen(function* () {
+        yield* checkPolicies([onlyCreatorOrPermittedCanEditPolicy, cannotArchiveWhileOngoingPolicy], { absence, actor: command.actor, now })
+        return AbsenceArchivedEvent.make({
+          absenceId: absence.absenceId, organizationId: absence.organizationId, actorId: command.actor.userId, occurredOn: now,
+        })
+      }),
+      evolve: {
+        ActiveAbsence: ({ absence, event }) => ArchivedAbsence.make({ ...absence, archivedAt: event.occurredOn, updatedAt: event.occurredOn }),
+      },
+    },
+
+    WithdrawAbsenceCommand: {
+      from: [DraftAbsence, ActiveAbsence],
+      event: AbsenceWithdrawnEvent,
+      decide: ({ absence, command, now }) => Result.gen(function* () {
+        yield* checkPolicies([onlyCreatorOrPermittedCanDeletePolicy], { absence, actor: command.actor, now })
+        return AbsenceWithdrawnEvent.make({
+          absenceId: absence.absenceId, organizationId: absence.organizationId, actorId: command.actor.userId, occurredOn: now,
+        })
+      }),
+      evolve: {
+        DraftAbsence:  ({ absence, event }) => DiscardedAbsence.make({ ...absence, archivedAt: event.occurredOn, updatedAt: event.occurredOn }),
+        ActiveAbsence: ({ absence, event }) => ArchivedAbsence.make({ ...absence, archivedAt: event.occurredOn, updatedAt: event.occurredOn }),
+      },
+    },
+  },
 })
 
-export const rescheduleAbsence = (input: RescheduleAbsenceInput): Result.Result<
-  AbsenceRescheduledEvent, NotAllowedToEditAbsenceError | AbsenceEditWindowClosedError | InvalidPeriodError
-> => Result.gen(function* () {
-  yield* checkPolicies(rescheduleAbsencePolicies, input)
-  const period = yield* createPeriod({ from: input.from, to: input.to })
-  return AbsenceRescheduledEvent.make({
-    absenceId: input.absence.absenceId, organizationId: input.absence.organizationId, actorId: input.actor.userId,
-    occurredOn: input.now, period, previousPeriod: input.absence.period,
-  })
-})
-
-export const reassignAbsence = (input: ReassignAbsenceInput): Result.Result<
-  AbsenceReassignedEvent,
-  NotAllowedToEditAbsenceError | AssigneeNotInOrganizationError | NotAllowedToAssignAbsenceError | AbsenceEditWindowClosedError
-> => Result.gen(function* () {
-  yield* checkPolicies(reassignAbsencePolicies, input)
-  return AbsenceReassignedEvent.make({
-    absenceId: input.absence.absenceId, organizationId: input.absence.organizationId, actorId: input.actor.userId,
-    occurredOn: input.now, assigneeId: input.assigneeId, previousAssigneeId: input.absence.assigneeId,
-  })
-})
-
-export const activateAbsence = (input: ActivateAbsenceInput): Result.Result<AbsenceActivatedEvent, NotAbsenceCreatorError> =>
-  Result.gen(function* () {
-    yield* checkPolicies(activateAbsencePolicies, input)
-    return AbsenceActivatedEvent.make({
-      absenceId: input.absence.absenceId, organizationId: input.absence.organizationId, actorId: input.actor.userId,
-      occurredOn: input.now,
-    })
-  })
-
-export const archiveAbsence = (input: ArchiveAbsenceInput): Result.Result<
-  AbsenceArchivedEvent, NotAllowedToEditAbsenceError | AbsenceOngoingError
-> => Result.gen(function* () {
-  yield* checkPolicies(archiveAbsencePolicies, input)
-  return AbsenceArchivedEvent.make({
-    absenceId: input.absence.absenceId, organizationId: input.absence.organizationId, actorId: input.actor.userId,
-    occurredOn: input.now,
-  })
-})
-
-export const withdrawAbsence = (input: WithdrawAbsenceInput): Result.Result<AbsenceWithdrawnEvent, NotAllowedToDeleteAbsenceError> =>
-  Result.gen(function* () {
-    yield* checkPolicies(withdrawAbsencePolicies, input)
-    return AbsenceWithdrawnEvent.make({
-      absenceId: input.absence.absenceId, organizationId: input.absence.organizationId, actorId: input.actor.userId,
-      occurredOn: input.now,
-    })
-  })
+export type Absence = Aggregate.State<typeof Absence>
+export type AbsenceEvent = Aggregate.Event<typeof Absence>

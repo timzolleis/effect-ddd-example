@@ -2,7 +2,7 @@ import { Context, DateTime, Effect, Layer } from "effect"
 import { DomainEvents } from "../../shared/domain-events.ts"
 import type { OrganizationId } from "../../shared/ids.ts"
 import type { AbsenceActor } from "../domain/absence-actor.ts"
-import { Absence, RescheduleAbsenceCommand } from "../domain/absence-aggregate.ts"
+import { Absence, RescheduleAbsenceCommand } from "../domain/absence.ts"
 import type {
   AbsenceAlreadyArchivedError, AbsenceChangedConcurrentlyError, AbsenceEditWindowClosedError, AbsenceNotFoundError,
   InvalidPeriodError, NotAllowedToEditAbsenceError,

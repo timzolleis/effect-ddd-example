@@ -3,7 +3,7 @@ import { DomainEvents } from "../../shared/domain-events.ts"
 import type { OrganizationId, UserId } from "../../shared/ids.ts"
 import { OrganizationMembers } from "../../shared/organization-members.ts"
 import type { AbsenceActor } from "../domain/absence-actor.ts"
-import { Absence, DraftAbsenceCommand } from "../domain/absence-aggregate.ts"
+import { Absence, DraftAbsenceCommand } from "../domain/absence.ts"
 import type {
   AbsenceChangedConcurrentlyError, AssigneeNotInOrganizationError, InvalidPeriodError, NotAllowedToAssignAbsenceError,
 } from "../domain/absence-error.ts"
